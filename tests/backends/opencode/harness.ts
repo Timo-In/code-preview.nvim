@@ -31,33 +31,41 @@ async function main() {
 
   // Dynamic import of the plugin (it's the default export)
   const pluginModule = await import(resolve(__dirname, "../../../backends/opencode/index.ts"))
-  const pluginFactory = pluginModule.default
+  const plugin = pluginModule.default
+  const hooks = new Map<string, (event: any) => Promise<void> | void>()
 
-  // Initialize the plugin with the project directory
-  const hooks = await pluginFactory({ directory: projectDir })
+  // Register handlers through the OpenCode v2 context API used in production.
+  await plugin.setup({
+    location: { directory: projectDir },
+    tool: {
+      hook: async (event: string, handler: (data: any) => Promise<void> | void) => {
+        // Real OpenCode v2 hook registration is asynchronous. Yield before
+        // recording the handler so setup must await registration to succeed.
+        await new Promise<void>((resolve) => setImmediate(resolve))
+        hooks.set(event, handler)
+      },
+    },
+  })
 
-  const beforeHook = hooks["tool.execute.before"]
-  const afterHook = hooks["tool.execute.after"]
+  const beforeHook = hooks.get("execute.before")!
+  const afterHook = hooks.get("execute.after")!
 
   switch (action) {
     case "edit_before": {
       const filePath = process.argv[5]
       const oldString = process.argv[6]
       const newString = process.argv[7]
-      await beforeHook(
-        { tool: "edit" },
-        { args: { filePath, oldString, newString, replaceAll: false } },
-      )
+      await beforeHook({
+        tool: "edit",
+        input: { filePath, oldString, newString, replaceAll: false },
+      })
       console.log("OK")
       break
     }
 
     case "edit_after": {
       const filePath = process.argv[5]
-      await afterHook(
-        { tool: "edit", args: { filePath } },
-        {},
-      )
+      await afterHook({ tool: "edit", input: { filePath } })
       console.log("OK")
       break
     }
@@ -65,30 +73,21 @@ async function main() {
     case "write_before": {
       const filePath = process.argv[5]
       const content = process.argv[6]
-      await beforeHook(
-        { tool: "write" },
-        { args: { filePath, content } },
-      )
+      await beforeHook({ tool: "write", input: { filePath, content } })
       console.log("OK")
       break
     }
 
     case "write_after": {
       const filePath = process.argv[5]
-      await afterHook(
-        { tool: "write", args: { filePath } },
-        {},
-      )
+      await afterHook({ tool: "write", input: { filePath } })
       console.log("OK")
       break
     }
 
     case "bash_before": {
       const command = process.argv[5]
-      await beforeHook(
-        { tool: "bash" },
-        { args: { command } },
-      )
+      await beforeHook({ tool: "bash", input: { command } })
       console.log("OK")
       break
     }
@@ -100,10 +99,7 @@ async function main() {
       // production — the post-tool re-detects the command to clear only that
       // command's markers (issue #83).
       const command = process.argv[5]
-      await afterHook(
-        { tool: "bash", args: { command } },
-        {},
-      )
+      await afterHook({ tool: "bash", input: { command } })
       console.log("OK")
       break
     }
@@ -118,14 +114,14 @@ async function main() {
       const old2 = process.argv[9]
       const new2 = process.argv[10]
 
-      await beforeHook(
-        { tool: "edit" },
-        { args: { filePath: file1, oldString: old1, newString: new1, replaceAll: false } },
-      )
-      await beforeHook(
-        { tool: "edit" },
-        { args: { filePath: file2, oldString: old2, newString: new2, replaceAll: false } },
-      )
+      await beforeHook({
+        tool: "edit",
+        input: { filePath: file1, oldString: old1, newString: new1, replaceAll: false },
+      })
+      await beforeHook({
+        tool: "edit",
+        input: { filePath: file2, oldString: old2, newString: new2, replaceAll: false },
+      })
       console.log("OK")
       break
     }

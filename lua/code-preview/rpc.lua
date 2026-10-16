@@ -26,6 +26,12 @@ local M = {}
 --- vim.notify ensures the developer sees the failure instead of a silent
 --- no-op preview.
 function M.dispatch(mod, fn, args_file)
+  if (mod == "code-preview.pre_tool" or mod == "code-preview.post_tool")
+    and not require("code-preview.hook_target").is_enabled()
+  then
+    return ""
+  end
+
   local ok, result = pcall(function()
     local f, err = io.open(args_file, "r")
     if not f then

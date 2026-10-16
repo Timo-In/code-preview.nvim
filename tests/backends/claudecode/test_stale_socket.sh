@@ -45,11 +45,29 @@ EOF
   run_posttool_hook "$payload" scan >/dev/null
   sleep 0.3
 
+  local daemon_pid
+  daemon_pid="$(nvim_eval "vim.fn.jobpid(require('code-preview').daemon_job)")"
+  if [[ ! "$daemon_pid" =~ ^[0-9]+$ ]] || (( daemon_pid <= 0 )); then
+    echo "  FAIL: previewd should be running before Neovim crashes" >&2
+    return 1
+  fi
+
   # Kill Neovim without cleaning the socket, simulating a stale socket entry.
   crash_nvim
   assert_file_exists "$first_socket" "old socket should remain on disk after crash" || return 1
   if kill -0 "$first_pid" 2>/dev/null; then
     echo "  FAIL: stale Neovim PID should be dead" >&2
+    return 1
+  fi
+
+  local tries=0
+  while kill -0 "$daemon_pid" 2>/dev/null && (( tries < 30 )); do
+    sleep 0.1
+    tries=$((tries + 1))
+  done
+  if kill -0 "$daemon_pid" 2>/dev/null; then
+    echo "  FAIL: previewd should exit after Neovim RPC disconnects" >&2
+    kill "$daemon_pid" 2>/dev/null || true
     return 1
   fi
 
@@ -89,17 +107,15 @@ EOF
   sleep 0.3
 }
 
-# ── Test: Hook exits cleanly without a guaranteed project match ──
+# ── Test: Hook refuses a live Neovim from another project ──
 
 test_no_matching_project_nvim_graceful() {
-  # Ensure no test Neovim is running before this test. The payload cwd points
-  # at a nonexistent project, so there is no guaranteed matching test instance.
-  # The scanner may still fall back to an unrelated ambient nvim, and this test
-  # intentionally does not assert socket absence.
+  # Keep one responsive Neovim available, but register it for TEST_PROJECT_DIR.
+  # A hook from another project must abstain instead of using that live socket.
   stop_nvim
-
-  local test_file
-  test_file="$(create_test_file "src/noserver.lua" 'print("hi")')"
+  start_nvim_on_socket "$TEST_PROJECT_DIR"
+  local unrelated_cwd="/tmp/nonexistent-project-$$"
+  reset_test_state
 
   local hook_tmpdir
   hook_tmpdir="$(mktemp -d "${TMPDIR:-/tmp}/claude-test-no-nvim-tmp.XXXXXX")"
@@ -108,9 +124,9 @@ test_no_matching_project_nvim_graceful() {
   payload=$(cat <<EOF
 {
   "tool_name": "Edit",
-  "cwd": "/tmp/nonexistent-project-$$",
+  "cwd": "$unrelated_cwd",
   "tool_input": {
-    "file_path": "$test_file",
+    "file_path": "$unrelated_cwd/src/noserver.lua",
     "old_string": "hi",
     "new_string": "bye"
   }
@@ -118,8 +134,16 @@ test_no_matching_project_nvim_graceful() {
 EOF
 )
 
-  # Force scan mode by blanking any inherited NVIM_LISTEN_ADDRESS. The hook
-  # must exit cleanly when there is no project-specific Neovim to attach to.
+  local selected
+  selected="$({
+    NVIM_LISTEN_ADDRESS="$TEST_SOCKET" bash -c '
+      source "$1" "$2" "$3"
+      printf "%s" "${NVIM_SOCKET:-}"
+    ' _ "$REPO_ROOT/bin/nvim-socket.sh" "$unrelated_cwd" "$unrelated_cwd/src/noserver.lua"
+  } 2>/dev/null)"
+  assert_eq "" "$selected" "explicit socket from another project must be rejected" || return 1
+
+  # Scan mode must also abstain and leave the unrelated Neovim untouched.
   local exit_code=0
   echo "$payload" | \
     NVIM_LISTEN_ADDRESS= \
@@ -129,6 +153,10 @@ EOF
   # The hook exits 0 on non-crash paths, including when it cannot identify a
   # project-specific nvim instance.
   assert_eq "0" "$exit_code" "hook must exit 0 without a guaranteed project nvim match" || return 1
+
+  local is_open
+  is_open="$(nvim_eval "require('code-preview.diff').is_open()")"
+  assert_eq "false" "$is_open" "unrelated Neovim must not open a preview" || return 1
 
   # Per ADR-0005 (issue #47 phase 3), the hook abstains entirely when no
   # Neovim is reachable: no proposed file is computed, no stdout, exit 0.
@@ -142,7 +170,7 @@ EOF
 # ── Run all tests ────────────────────────────────────────────────
 
 run_test "Hook works after Neovim restart (stale socket)" test_stale_socket_recovery
-run_test "Hook exits cleanly without a guaranteed project match" test_no_matching_project_nvim_graceful
+run_test "Hook refuses a live Neovim from another project" test_no_matching_project_nvim_graceful
 
 # ── Teardown ─────────────────────────────────────────────────────
 

@@ -5,13 +5,14 @@ M.config = {}
 
 local default_config = {
   debug = false,  -- enable debug logging to stdpath("log")/code-preview.log
+  hooks = {
+    terminal_only = false, -- reject hook RPCs for headless/GUI Neovim instances
+  },
   diff = {
-    layout = "tab",        -- "tab", "vsplit", or "inline"
-    layouts = {},          -- override layout per backend: { opencode = "tab", codex = "vsplit" }
-    labels = { current = "CURRENT", proposed = "PROPOSED" },
-    equalize = true,
-    full_file = true,
     visible_only = false,  -- only show diffs for files open in a visible nvim window
+    auto_close = false,    -- when false, keeps preview marks until closed with <leader>dq
+    auto_closes = {},      -- override auto_close per backend: e.g. { claudecode = true, codex = false }
+    linger_ms = 1500,      -- fade backgrounds after completion; signs remain until edit or save
     defer_claude_permissions = false,  -- when true, skip permissionDecision and let Claude Code's own settings decide
   },
   neo_tree = {
@@ -37,29 +38,7 @@ local default_config = {
   keys = {
     -- Set any entry to false to skip that binding. Set `keys = false` to skip all.
     -- <Plug>(CodePreviewCloseAll) is always defined so users can map it themselves.
-    next_change = "]c",        -- buffer-local in inline diff buffers
-    prev_change = "[c",        -- buffer-local in inline diff buffers
     close_all   = "<leader>dq", -- global; close diff and clear indicators
-  },
-  highlights = {
-    current = {
-      DiffAdd    = { bg = "#4c2e2e" },
-      DiffDelete = { bg = "#4c2e2e" },
-      DiffChange = { bg = "#4c3a2e" },
-      DiffText   = { bg = "#5c3030" },
-    },
-    proposed = {
-      DiffAdd    = { bg = "#2e4c2e" },
-      DiffDelete = { bg = "#4c2e2e" },
-      DiffChange = { bg = "#2e3c4c" },
-      DiffText   = { bg = "#3e5c3e" },
-    },
-    inline = {
-      added        = { bg = "#2e4c2e" },
-      removed      = { bg = "#4c2e2e" },
-      added_text   = { bg = "#3a6e3a" },
-      removed_text = { bg = "#6e3a3a" },
-    },
   },
 }
 
@@ -91,13 +70,20 @@ function M.setup(user_config)
 
   -- ── New commands ──────────────────────────────────────────────
 
-  vim.api.nvim_create_user_command("CodePreviewInstallClaudeCodeHooks", function()
-    require("code-preview.backends.claudecode").install()
-  end, { desc = "Install code-preview PreToolUse/PostToolUse hooks for Claude Code" })
+  local scope_opts = {
+    nargs = "?",
+    complete = function() return { "global", "local" } end,
+  }
 
-  vim.api.nvim_create_user_command("CodePreviewUninstallClaudeCodeHooks", function()
-    require("code-preview.backends.claudecode").uninstall()
-  end, { desc = "Uninstall code-preview hooks for Claude Code" })
+  vim.api.nvim_create_user_command("CodePreviewInstallClaudeCodeHooks", function(cmd_opts)
+    local scope = cmd_opts.args ~= "" and cmd_opts.args or (M.config and M.config.default_scope) or "global"
+    require("code-preview.backends.claudecode").install(scope)
+  end, vim.tbl_extend("force", scope_opts, { desc = "Install code-preview PreToolUse/PostToolUse hooks for Claude Code [global|local]" }))
+
+  vim.api.nvim_create_user_command("CodePreviewUninstallClaudeCodeHooks", function(cmd_opts)
+    local scope = cmd_opts.args ~= "" and cmd_opts.args or nil
+    require("code-preview.backends.claudecode").uninstall(scope)
+  end, vim.tbl_extend("force", scope_opts, { desc = "Uninstall code-preview hooks for Claude Code [global|local]" }))
 
   vim.api.nvim_create_user_command("CodePreviewInstallOpenCodeHooks", function()
     require("code-preview.backends.opencode").install()
@@ -115,17 +101,55 @@ function M.setup(user_config)
     require("code-preview.backends.copilot").uninstall()
   end, { desc = "Uninstall code-preview hooks for GitHub Copilot CLI" })
 
-  vim.api.nvim_create_user_command("CodePreviewInstallCodexCliHooks", function()
-    require("code-preview.backends.codex").install()
-  end, { desc = "Install code-preview hooks for OpenAI Codex CLI" })
+  vim.api.nvim_create_user_command("CodePreviewInstallCodexCliHooks", function(cmd_opts)
+    local scope = cmd_opts.args ~= "" and cmd_opts.args or (M.config and M.config.default_scope) or "global"
+    require("code-preview.backends.codex").install(scope)
+  end, vim.tbl_extend("force", scope_opts, { desc = "Install code-preview hooks for OpenAI Codex CLI [global|local]" }))
 
-  vim.api.nvim_create_user_command("CodePreviewUninstallCodexCliHooks", function()
-    require("code-preview.backends.codex").uninstall()
-  end, { desc = "Uninstall code-preview hooks for OpenAI Codex CLI" })
+  vim.api.nvim_create_user_command("CodePreviewUninstallCodexCliHooks", function(cmd_opts)
+    local scope = cmd_opts.args ~= "" and cmd_opts.args or nil
+    require("code-preview.backends.codex").uninstall(scope)
+  end, vim.tbl_extend("force", scope_opts, { desc = "Uninstall code-preview hooks for OpenAI Codex CLI [global|local]" }))
 
   vim.api.nvim_create_user_command("CodePreviewCloseDiff", function()
     require("code-preview.diff").close_diff_and_clear()
-  end, { desc = "Manually close code-preview diff (use after rejecting a change)" })
+    require("code-preview.in_place").clear_preview()
+  end, { desc = "Manually close code-preview diff and clear in-place preview" })
+
+  vim.api.nvim_create_user_command("CodePreviewClear", function()
+    require("code-preview.in_place").clear_preview()
+  end, { desc = "Clear in-place preview marks on current buffer" })
+
+  vim.api.nvim_create_user_command("CodePreviewClearAll", function()
+    require("code-preview.in_place").clear_all()
+    require("code-preview.diff").close_diff_and_clear()
+  end, { desc = "Clear all in-place preview marks and diffs" })
+
+  vim.api.nvim_create_user_command("CodePreviewStartDaemon", function(opts)
+    local path = opts.args ~= "" and opts.args or vim.fn.getcwd()
+    M.start_daemon(path)
+  end, { nargs = "?", complete = "dir", desc = "Start Go previewd daemon for directory" })
+
+  vim.api.nvim_create_user_command("CodePreviewStopDaemon", function()
+    M.stop_daemon()
+  end, { desc = "Stop Go previewd daemon" })
+
+  vim.api.nvim_create_user_command("CodePreviewMockTest", function()
+    local res = require("code-preview.mock_test").run_simulation()
+    vim.notify(table.concat(res, "\n"), vim.log.levels.INFO, { title = "code-preview mock test" })
+  end, { desc = "Run in-place 10-iteration mock verification test" })
+
+  vim.api.nvim_create_user_command("CodePreviewDemo", function()
+    package.loaded["code-preview.renderer"] = nil
+    local cur_buf = vim.api.nvim_get_current_buf()
+    local renderer = require("code-preview.renderer")
+    renderer.render(cur_buf, {
+      { type = "add",    start_line = 1, end_line = 1 },
+      { type = "change", start_line = 2, end_line = 2 },
+      { type = "delete", at_line = 2, deleted_lines = { "  - local legacy_code = 'deleted'" } },
+    })
+    vim.notify("[code-preview] Visual demo applied: Green add, Cyan change, Gray delete. Press <leader>aq to clear.", vim.log.levels.INFO)
+  end, { desc = "Show visual demo with fresh light-green and sign indicators" })
 
   vim.api.nvim_create_user_command("CodePreviewStatus", function()
     M.status()
@@ -157,6 +181,111 @@ function M.setup(user_config)
       vim.keymap.set("n", close_all, "<Plug>(CodePreviewCloseAll)",
         { desc = "Close code-preview diff" })
     end
+  end
+
+  -- Auto-terminate daemon on editor exit
+  local augroup = vim.api.nvim_create_augroup("CodePreviewDaemonLifecycle", { clear = true })
+  vim.api.nvim_create_autocmd("VimLeavePre", {
+    group = augroup,
+    callback = function()
+      M.stop_daemon()
+    end,
+    desc = "Stop code-preview Go daemon on exit",
+  })
+end
+
+M.daemon_job = nil
+M.daemon_target = nil
+M.daemon_worktree = nil
+
+--- Start Go previewd daemon
+---@param watch_path string?
+---@param debounce_ms integer?
+function M.start_daemon(watch_path, debounce_ms)
+  M.stop_daemon()
+
+  local socket = vim.env.NVIM_LISTEN_ADDRESS or vim.v.servername
+  if not socket or socket == "" then
+    vim.notify("[code-preview] Neovim socket not found; cannot start daemon", vim.log.levels.ERROR)
+    return
+  end
+
+  local this_source = debug.getinfo(1, "S").source:gsub("^@", "")
+  local root = vim.fs.root(this_source, { ".git" }) or vim.fn.stdpath("config")
+  local bin_path = vim.fs.normalize(root .. "/bin/previewd")
+
+  if vim.fn.executable(bin_path) ~= 1 then
+    vim.notify("[code-preview] previewd binary not found at " .. bin_path, vim.log.levels.ERROR)
+    return
+  end
+
+  local project = require("code-preview.project")
+  local target = project.normalize(watch_path or vim.fn.getcwd())
+  local worktree = project.root(target)
+  if not target or not worktree or not project.contains(worktree, target) then
+    vim.notify("[code-preview] Invalid daemon target", vim.log.levels.ERROR)
+    return
+  end
+  local debounce = debounce_ms or 80
+
+  local cmd = {
+    bin_path,
+    "--socket", socket,
+    "--worktree", worktree,
+    "--path", target,
+    "--debounce", tostring(debounce),
+  }
+
+  local job_id
+  job_id = vim.fn.jobstart(cmd, {
+    on_stdout = function(_, data)
+      if data and #data > 0 and data[1] ~= "" then
+        require("code-preview.log").debug("[daemon stdout] " .. table.concat(data, "\n"))
+      end
+    end,
+    on_stderr = function(_, data)
+      if data and #data > 0 and data[1] ~= "" then
+        require("code-preview.log").debug("[daemon stderr] " .. table.concat(data, "\n"))
+      end
+    end,
+    on_exit = function(id, code)
+      if M.daemon_job == id then
+        M.daemon_job = nil
+        M.daemon_target = nil
+        M.daemon_worktree = nil
+      end
+      require("code-preview.log").info("[daemon] Exited with code " .. tostring(code))
+    end,
+  })
+  M.daemon_job = job_id
+
+  if M.daemon_job and M.daemon_job > 0 then
+    M.daemon_target = target
+    M.daemon_worktree = worktree
+    vim.notify(string.format("[code-preview] Go Daemon started for %s (job=%d)", vim.fn.fnamemodify(target, ":~"), M.daemon_job), vim.log.levels.INFO)
+  else
+    vim.notify("[code-preview] Failed to start Go Daemon", vim.log.levels.ERROR)
+  end
+end
+
+--- Stop Go previewd daemon
+function M.stop_daemon()
+  if M.daemon_job and M.daemon_job > 0 then
+    pcall(vim.fn.jobstop, M.daemon_job)
+    M.daemon_job = nil
+  end
+  M.daemon_target = nil
+  M.daemon_worktree = nil
+end
+
+--- Ensure Go previewd daemon is running for target directory, start on-demand if missing
+---@param target_path string?
+---@param debounce_ms integer?
+function M.ensure_daemon(target_path, debounce_ms)
+  local target = require("code-preview.project").normalize(target_path or vim.fn.getcwd())
+  local running = M.daemon_job and vim.fn.jobwait({ M.daemon_job }, 0)[1] == -1
+  if not running or M.daemon_target ~= target then
+    M.start_daemon(target, debounce_ms)
   end
 end
 
@@ -247,14 +376,14 @@ function M.status()
 
   for _, b in ipairs(BACKENDS) do
     local s = require("code-preview.backends." .. b.name).install_state()
-    if s.state == "installed" then
+    if s.state and s.state:match("^installed") then
       if s.warnings and #s.warnings > 0 then
-        table.insert(lines, "  " .. b.label .. " : installed BUT " .. table.concat(s.warnings, "; "))
+        table.insert(lines, "  " .. b.label .. " : " .. s.state .. " BUT " .. table.concat(s.warnings, "; "))
       else
-        table.insert(lines, "  " .. b.label .. " : installed")
+        table.insert(lines, "  " .. b.label .. " : " .. s.state)
       end
     else
-      table.insert(lines, "  " .. b.label .. " : not installed  ->  " .. b.install_cmd)
+      table.insert(lines, "  " .. b.label .. " : not installed  ->  " .. b.install_cmd .. " [global|local]")
     end
   end
 

@@ -28,6 +28,7 @@ local log      = require("code-preview.log")
 -- the same Neovim never collide. Tempfile prefix is now code-preview-* (see #60).
 
 local _counter = 0
+local TEMPFILE_MAX_AGE_SECONDS = 7 * 24 * 60 * 60
 local function next_id()
   _counter = _counter + 1
   return string.format("%d-%d", vim.loop.hrtime(), _counter)
@@ -49,12 +50,11 @@ local function tmpdir()
   return os.getenv("TMPDIR") or "/tmp"
 end
 
--- One-time startup sweep of leftover proposal tempfiles.
+-- One-time startup sweep of stale proposal tempfiles.
 --
--- Per-proposal tempfile tracking is a follow-up (see issue #64). To prevent
--- unbounded accumulation across long sessions where Neovim doesn't restart,
--- run the sweep once at setup(). macOS doesn't auto-evict /tmp under a few
--- days, so this matters in practice.
+-- Multiple Neovim instances share the system temp directory, so a startup
+-- sweep must never remove another live instance's fresh proposal. Keep recent
+-- files and only evict entries old enough to be abandoned.
 --
 -- The old claude-* patterns are matched transitionally so leftover tempfiles
 -- from prior nvim sessions (pre-#60) still get cleaned up. Drop the old
@@ -64,6 +64,7 @@ function M.sweep_leftover_tempfiles()
   local dir = tmpdir()
   local fd = vim.loop.fs_scandir(dir)
   if not fd then return end
+  local cutoff = os.time() - TEMPFILE_MAX_AGE_SECONDS
   while true do
     local name = vim.loop.fs_scandir_next(fd)
     if not name then break end
@@ -74,7 +75,12 @@ function M.sweep_leftover_tempfiles()
        name:match("^claude%-diff%-original%-") or
        name:match("^claude%-diff%-proposed%-") or
        name:match("^claude%-patch%-") then
-      pcall(vim.loop.fs_unlink, dir .. "/" .. name)
+      local path = dir .. "/" .. name
+      local stat = vim.loop.fs_stat(path)
+      local modified = stat and stat.mtime and stat.mtime.sec
+      if modified and modified < cutoff then
+        pcall(vim.loop.fs_unlink, path)
+      end
     end
   end
 end
@@ -160,6 +166,7 @@ local function present_single_file(file_path, proposed_content, input, cfg, back
   end
 
   diff.show_diff(orig, prop, display_path(file_path, input.cwd), file_path, nil, backend)
+  vim.notify(string.format("[code-preview] Reviewing %s (<leader>aq to close)", display_path(file_path, input.cwd)), vim.log.levels.INFO, { title = "code-preview" })
 end
 
 local function handle_edit(input, cfg, backend)
@@ -184,9 +191,89 @@ local function handle_multi_edit(input, cfg, backend)
   present_single_file(fp, content, input, cfg, backend)
 end
 
-local function handle_bash(input)
+--- Parse Heredoc writes: cat << 'EOF' > file
+local function parse_heredoc(cmd)
+  local lines = vim.split(cmd, "\n")
+  if #lines < 2 then return nil end
+  local first = vim.trim(lines[1])
+  local raw_delim, op, target = first:match("^cat%s+<<[%s%-]*([^%s>]+)%s*(>>?)%s*(.+)$")
+  if not raw_delim then
+    op, target, raw_delim = first:match("^cat%s*(>>?)%s*([^<]+)%s*<<[%s%-]*([^%s>]+)$")
+  end
+  if not raw_delim or not target then return nil end
+
+  local delim = raw_delim:gsub("['\"]", ""):gsub("\\", "")
+  target = vim.trim(target):gsub("['\"]", "")
+
+  local body_lines = {}
+  local found_delim = false
+  for i = 2, #lines do
+    local line = lines[i]
+    if vim.trim(line) == delim then
+      found_delim = true
+      break
+    end
+    table.insert(body_lines, line)
+  end
+
+  if found_delim then
+    return target, table.concat(body_lines, "\n") .. "\n", (op == ">>")
+  end
+  return nil
+end
+
+--- Parse echo "..." > file or printf "..." > file
+local function parse_echo_or_printf(cmd)
+  local verb, body, op, target = cmd:match("^%s*(echo)%s+[\"'](.-)[\"']%s*(>>?)%s*(.+)%s*$")
+  if not verb then
+    verb, body, op, target = cmd:match("^%s*(printf)%s+[\"'](.-)[\"']%s*(>>?)%s*(.+)%s*$")
+  end
+  if verb and body and target then
+    target = vim.trim(target):gsub("['\"]", "")
+    if verb == "echo" then
+      body = body .. "\n"
+    else
+      body = body:gsub("\\n", "\n"):gsub("\\t", "\t")
+    end
+    return target, body, (op == ">>")
+  end
+  return nil
+end
+
+--- Shadow simulation for sed -i
+local function simulate_sed(cmd, cwd)
+  if not cmd:match("^%s*sed%s+%-i") then return nil end
+  local parts = vim.split(cmd, "%s+")
+  local target_token = parts[#parts]
+  if not target_token or target_token == "" then return nil end
+  target_token = target_token:gsub("['\"]", "")
+  local target_path = (target_token:sub(1, 1) == "/" or target_token:sub(1, 2) == "~/")
+    and vim.fn.expand(target_token)
+    or (cwd .. "/" .. target_token)
+
+  if vim.fn.filereadable(target_path) ~= 1 then return nil end
+
+  local shadow = vim.fn.tempname() .. "_" .. vim.fn.fnamemodify(target_path, ":t")
+  local uv = vim.uv or vim.loop
+  uv.fs_copyfile(target_path, shadow)
+
+  local shadow_cmd = cmd:gsub(vim.pesc(parts[#parts]) .. "%s*$", vim.fn.shellescape(shadow))
+  local _ = vim.fn.system(shadow_cmd)
+  if vim.v.shell_error == 0 and vim.fn.filereadable(shadow) == 1 then
+    local lines = vim.fn.readfile(shadow)
+    local content = table.concat(lines, "\n")
+    if #lines > 0 then content = content .. "\n" end
+    os.remove(shadow)
+    return target_path, content
+  end
+  if vim.fn.filereadable(shadow) == 1 then os.remove(shadow) end
+  return nil
+end
+
+local function handle_bash(input, cfg, backend)
   local cmd = input.tool_input.command or ""
-  local detected = shell_detect.detect(cmd, input.cwd or "")
+  local cwd = input.cwd or ""
+  local detected = shell_detect.detect(cmd, cwd)
 
   local touched = false
 
@@ -212,6 +299,42 @@ local function handle_bash(input)
       neo_tree.reveal_deferred(target, 300)
     end
   end
+
+  -- Tier 2 enhancement: Extract content diff for deterministic shell writes
+  local preview_target, proposed_content
+  local h_target, h_body, h_append = parse_heredoc(cmd)
+  if h_target and h_body then
+    preview_target = shell_detect.resolve_path(h_target, cwd)
+    if h_append and vim.fn.filereadable(preview_target) == 1 then
+      local orig = table.concat(vim.fn.readfile(preview_target), "\n") .. "\n"
+      proposed_content = orig .. h_body
+    else
+      proposed_content = h_body
+    end
+  else
+    local e_target, e_body, e_append = parse_echo_or_printf(cmd)
+    if e_target and e_body then
+      preview_target = shell_detect.resolve_path(e_target, cwd)
+      if e_append and vim.fn.filereadable(preview_target) == 1 then
+        local orig = table.concat(vim.fn.readfile(preview_target), "\n") .. "\n"
+        proposed_content = orig .. e_body
+      else
+        proposed_content = e_body
+      end
+    else
+      preview_target, proposed_content = simulate_sed(cmd, cwd)
+    end
+  end
+
+  if preview_target and proposed_content then
+    log.info(log.fmt("pre_tool: bash Tier 2 diff preview generated for %s", preview_target))
+    present_single_file(preview_target, proposed_content, input, cfg, backend)
+    -- diff.show_diff marks previews as modified/created. Preserve the Bash
+    -- origin prefix so the post-hook only clears this proposal's own marker.
+    changes.set(preview_target, vim.uv.fs_stat(preview_target) and "bash_modified" or "bash_created")
+    return true
+  end
+  return false
 end
 
 local function handle_apply_patch(input, cfg, backend)
@@ -251,9 +374,20 @@ local function handle_apply_patch(input, cfg, backend)
       -- codex models (e.g. GPT 5.3) write an absolute path there, which would
       -- render the tab as `D:\...` instead of a cwd-relative label.
       diff.show_diff(orig, prop, display_path(file.path, input.cwd), file.path, file.action, backend)
+      if #files <= 1 then
+        vim.notify(string.format("[code-preview] Reviewing patch for %s (<leader>aq to close)", display_path(file.path, input.cwd)), vim.log.levels.INFO, { title = "code-preview" })
+      end
     else
       log.info(log.fmt("pre_tool: ApplyPatch skip %s (visible_only)", file.rel_path))
     end
+  end
+
+  if #files > 1 then
+    vim.notify(
+      string.format("[code-preview] AI edited %d files across tabs (use gt/gT to navigate)", #files),
+      vim.log.levels.INFO,
+      { title = "code-preview" }
+    )
   end
 end
 
@@ -261,7 +395,7 @@ local dispatchers = {
   Edit       = handle_edit,
   Write      = handle_write,
   MultiEdit  = handle_multi_edit,
-  Bash       = function(input, _cfg, _backend) handle_bash(input) end,
+  Bash       = handle_bash,
   ApplyPatch = handle_apply_patch,
 }
 
@@ -270,24 +404,50 @@ local dispatchers = {
 --- Handle a normalised PreToolUse hook.
 --- @param raw table  decoded hook payload (per-backend shape)
 --- @param backend string  CODE_PREVIEW_BACKEND value
+--- @param routed_cwd string?  project asserted by the hook-entry resolver
 --- @return string  bytes the hook-entry shim should print to stdout
-function M.handle(raw, backend)
+function M.handle(raw, backend, routed_cwd)
   local cfg = require("code-preview").config or {}
   local input = normalisers.normalise(raw, backend)
   local tool_name = input and input.tool_name
 
+  if routed_cwd then
+    local target_file = input and input.tool_input and input.tool_input.file_path or nil
+    if not require("code-preview.hook_target").matches_project(routed_cwd, target_file) then
+      log.warn(log.fmt("pre_tool: rejected cross-project route cwd=%s target=%s",
+        tostring(routed_cwd), tostring(target_file)))
+      return ""
+    end
+  end
+
+  -- Auto-start Go preview daemon on demand for the current target/worktree
+  pcall(function()
+    local target = input and input.cwd or nil
+    if not target or target == "" then
+      local file_path = input and input.tool_input and input.tool_input.file_path or nil
+      target = file_path and (vim.fs.root(file_path, { ".git" }) or file_path) or vim.fn.getcwd()
+    end
+    require("code-preview").ensure_daemon(target)
+  end)
+
   log.info(log.fmt("pre_tool: tool=%s backend=%s", tostring(tool_name), tostring(backend)))
 
   local fn = dispatchers[tool_name]
+  local has_preview = false
   if fn then
-    local ok, err = pcall(fn, input, cfg, backend)
+    local ok, res = pcall(fn, input, cfg, backend)
     if not ok then
-      log.error("pre_tool: dispatch failed: " .. tostring(err))
+      log.error("pre_tool: dispatch failed: " .. tostring(res))
+    else
+      if tool_name == "Bash" and res == true then
+        has_preview = true
+      end
     end
   end
 
   return emitters.emit(backend, {
     tool_name = tool_name,
+    has_preview = has_preview,
     defer_claude_permissions = cfg.diff and cfg.diff.defer_claude_permissions or false,
   })
 end

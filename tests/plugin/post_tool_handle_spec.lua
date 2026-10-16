@@ -79,6 +79,18 @@ describe("post_tool.handle (return value)", function()
 end)
 
 describe("post_tool.handle (ApplyPatch)", function()
+  local plugin = require("code-preview")
+  local saved_auto_close
+
+  before_each(function()
+    saved_auto_close = plugin.config.diff.auto_close
+    plugin.config.diff.auto_close = true
+  end)
+
+  after_each(function()
+    plugin.config.diff.auto_close = saved_auto_close
+  end)
+
   it("custom-patch format (*** Update File:) closes one preview per file", function()
     -- Regression: gsub returns (string, count); without parens around the
     -- gsub call, table.insert falls into its 3-arg (t, pos, value) form and

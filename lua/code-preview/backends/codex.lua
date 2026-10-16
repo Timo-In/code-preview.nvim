@@ -14,9 +14,23 @@ local platform = require("code-preview.platform")
 local function bin_dir()     return plugin_root() .. "/bin" end
 local function hook_script() return bin_dir() .. "/hook-entry" .. platform.script_ext() end
 
-local function codex_dir()    return vim.fn.getcwd() .. "/.codex" end
-local function hooks_path()   return codex_dir() .. "/hooks.json" end
-local function config_path()  return codex_dir() .. "/config.toml" end
+local function global_codex_dir()
+  local codex_home = vim.env.CODEX_HOME
+  if codex_home and codex_home ~= "" then
+    return codex_home
+  end
+  return vim.fn.expand("~/.codex")
+end
+
+local function codex_dir(scope)
+  if scope == "global" then
+    return global_codex_dir()
+  end
+  return vim.fn.getcwd() .. "/.codex"
+end
+
+local function hooks_path(scope)   return codex_dir(scope) .. "/hooks.json" end
+local function config_path(scope)  return codex_dir(scope) .. "/config.toml" end
 
 -- Markers we use to identify our hook entries when merging with user-authored
 -- hooks. The Codex docs allow multiple hooks per event, so we cooperate rather
@@ -129,9 +143,15 @@ end
 --- Resolve the effective state of Codex's `hooks` feature flag.
 --- Project-local config wins over the global config; in the absence of any
 --- explicit setting, Codex defaults to enabled, so we do too.
+--- @param scope string? "global"|"local"
 --- @return "enabled"|"disabled"
-local function feature_flag_state()
-  local local_state = file_flag_state(config_path())
+local function feature_flag_state(scope)
+  if scope == "global" then
+    local g_state = file_flag_state(global_config_path())
+    if g_state ~= nil then return g_state end
+    return "enabled"
+  end
+  local local_state = file_flag_state(config_path("local"))
   if local_state ~= nil then return local_state end
   local global_state = file_flag_state(global_config_path())
   if global_state ~= nil then return global_state end
@@ -147,20 +167,26 @@ local function ensure_executable(path)
   return true
 end
 
-function M.install()
+--- Install Codex hooks into target scope ("global" or "local").
+--- Defaults to "global" so hooks work seamlessly across all projects.
+--- @param scope string? "global"|"local"
+function M.install(scope)
+  scope = (scope == "local") and "local" or "global"
   local hook = hook_script()
   if not ensure_executable(hook) then return end
 
-  vim.fn.mkdir(codex_dir(), "p")
+  local target_dir = codex_dir(scope)
+  local target_hooks = hooks_path(scope)
+  vim.fn.mkdir(target_dir, "p")
 
   -- Merge with existing hooks rather than overwrite, since the user may have
   -- their own entries (logging, prompt scrubbing, etc.) and Codex supports
   -- stacking multiple hooks per event. Bail if the existing file is invalid
   -- JSON — overwriting would silently destroy whatever the user had.
-  local ok, data_or_err = read_json(hooks_path())
+  local ok, data_or_err = read_json(target_hooks)
   if not ok then
     vim.notify(
-      "[code-preview] Refusing to install: " .. hooks_path()
+      "[code-preview] Refusing to install: " .. target_hooks
         .. " is not valid JSON (" .. data_or_err .. "). Fix or delete it, then retry.",
       vim.log.levels.ERROR
     )
@@ -180,83 +206,89 @@ function M.install()
     hooks   = { { type = "command", command = platform.hook_command(hook, "codex post") } },
   })
 
-  write_json(hooks_path(), data)
-  vim.notify("[code-preview] Codex hooks installed → " .. hooks_path(), vim.log.levels.INFO)
+  write_json(target_hooks, data)
+  vim.notify(string.format("[code-preview] Codex hooks installed (%s) → %s", scope, target_hooks), vim.log.levels.INFO)
 
   -- Modern Codex enables hooks by default — no config.toml entry needed. We
   -- only nudge the user if they've *explicitly* opted out via `hooks = false`
   -- (or the legacy `codex_hooks = false`) under `[features]`.
-  if feature_flag_state() == "disabled" then
+  if feature_flag_state(scope) == "disabled" then
     vim.notify(
       "[code-preview] Codex hooks are disabled in your config: `[features] hooks = false` (or `codex_hooks = false`) is set in "
-        .. config_path() .. " or " .. global_config_path()
+        .. config_path(scope) .. " or " .. global_config_path()
         .. ". Remove the line, or set `hooks = true`, before running Codex.",
       vim.log.levels.WARN
     )
   end
 end
 
-function M.uninstall()
-  local path = hooks_path()
-  local ok, data_or_err = read_json(path)
-  if not ok then
-    vim.notify(
-      "[code-preview] Cannot uninstall: " .. path
-        .. " is not valid JSON (" .. data_or_err .. "). Fix or delete it manually.",
-      vim.log.levels.ERROR
-    )
-    return
+--- Uninstall Codex hooks from target scope ("global", "local", or both if nil).
+--- @param scope string? "global"|"local"|nil
+function M.uninstall(scope)
+  scope = (scope == "global" or scope == "local") and scope or nil
+  local scopes_to_clean = scope and { scope } or { "local", "global" }
+  for _, s in ipairs(scopes_to_clean) do
+    local path = hooks_path(s)
+    if vim.fn.filereadable(path) == 1 then
+      local ok, data_or_err = read_json(path)
+      if ok and data_or_err.hooks then
+        local data = data_or_err
+        data.hooks.PreToolUse  = remove_ours(data.hooks.PreToolUse)
+        data.hooks.PostToolUse = remove_ours(data.hooks.PostToolUse)
+        write_json(path, data)
+        vim.notify(string.format("[code-preview] Codex hooks uninstalled (%s) from %s", s, path), vim.log.levels.INFO)
+      end
+    end
   end
-  local data = data_or_err
-  if not data.hooks then
-    vim.notify("[code-preview] No Codex hooks found at " .. path, vim.log.levels.WARN)
-    return
-  end
-
-  data.hooks.PreToolUse  = remove_ours(data.hooks.PreToolUse)
-  data.hooks.PostToolUse = remove_ours(data.hooks.PostToolUse)
-
-  -- If the file ends up with empty arrays (or just our entries removed and
-  -- nothing else of substance), keep it on disk — the user might be
-  -- mid-edit. Don't try to be clever about deleting it.
-  write_json(path, data)
-  vim.notify("[code-preview] Codex hooks uninstalled from " .. path, vim.log.levels.INFO)
 end
 
 -- Exposed so :CodePreviewStatus can report whether the feature flag is set
 -- without duplicating the parser.
-function M.feature_flag_state() return feature_flag_state() end
+function M.feature_flag_state(scope) return feature_flag_state(scope) end
 
---- Report Codex install state. Hooks-wired-up is the primary signal. Modern
---- Codex enables hooks by default, so we only warn when the user has
---- explicitly disabled them via `[features] hooks = false` (or the legacy
---- `codex_hooks = false`) in config.toml.
---- @return { state: "installed"|"missing", warnings: string[]? }
+--- Report Codex install state. Checks both local and global installations.
+--- @return { state: "installed (global)"|"installed (local)"|"installed (local+global)"|"missing", warnings: string[]? }
 function M.install_state()
-  if not M.is_installed() then return { state = "missing" } end
-  if feature_flag_state() == "disabled" then
-    return {
-      state = "installed",
-      warnings = { "hooks explicitly disabled in .codex/config.toml (`[features] hooks = false`)" },
-    }
+  local local_ok = M.is_installed("local")
+  local global_ok = M.is_installed("global")
+
+  if not local_ok and not global_ok then
+    return { state = "missing" }
   end
-  return { state = "installed" }
+
+  local warnings = {}
+  if feature_flag_state() == "disabled" then
+    table.insert(warnings, "hooks explicitly disabled in config.toml (`[features] hooks = false`)")
+  end
+
+  local scope_desc = (local_ok and global_ok and "local+global")
+    or (local_ok and "local")
+    or "global"
+
+  return {
+    state = "installed (" .. scope_desc .. ")",
+    warnings = #warnings > 0 and warnings or nil,
+  }
 end
 
--- True iff `path`'s hooks.json contains an entry referencing our adapter
--- script. Used by status display to detect installation without relying on
--- file existence alone.
-function M.is_installed()
-  local ok, data = read_json(hooks_path())
-  if not ok or not data.hooks then return false end
-  for _, ev in ipairs({ "PreToolUse", "PostToolUse" }) do
-    for _, entry in ipairs(data.hooks[ev] or {}) do
-      for _, h in ipairs(entry.hooks or {}) do
-        if is_our_command(h.command) then return true end
+--- True iff target scope's hooks.json contains an entry referencing our adapter.
+--- If scope is nil, returns true if either local or global is installed.
+--- @param scope string? "global"|"local"|nil
+--- @return boolean
+function M.is_installed(scope)
+  if scope then
+    local ok, data = read_json(hooks_path(scope))
+    if not ok or not data.hooks then return false end
+    for _, ev in ipairs({ "PreToolUse", "PostToolUse" }) do
+      for _, entry in ipairs(data.hooks[ev] or {}) do
+        for _, h in ipairs(entry.hooks or {}) do
+          if is_our_command(h.command) then return true end
+        end
       end
     end
+    return false
   end
-  return false
+  return M.is_installed("local") or M.is_installed("global")
 end
 
 return M

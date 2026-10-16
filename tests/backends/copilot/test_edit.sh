@@ -47,6 +47,7 @@ run_copilot_post() {
 
 setup_test_project
 start_nvim
+nvim_exec "require('code-preview').config.diff.auto_close = true"
 
 # ── Test: edit tool opens diff, post closes it ──────────────────
 

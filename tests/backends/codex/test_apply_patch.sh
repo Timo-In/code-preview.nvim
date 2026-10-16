@@ -39,6 +39,8 @@ run_codex_post_patch() {
 
 setup_test_project
 start_nvim
+# This suite asserts the complete before/after lifecycle, including closure.
+nvim_exec "require('code-preview').config.diff.auto_close = true"
 
 # ── Test: single-file Update via apply_patch ────────────────────
 

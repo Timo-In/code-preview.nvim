@@ -9,6 +9,9 @@
 
 setup_test_project
 start_nvim
+# These cases verify post-hook cleanup, so opt into the non-default auto-close
+# behavior explicitly instead of depending on a historical default.
+nvim_exec "require('code-preview').config.diff.auto_close = true"
 
 # ── Test: Edit tool opens diff preview ───────────────────────────
 

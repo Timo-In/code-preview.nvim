@@ -39,7 +39,7 @@ deep-merged over the defaults.
 <
 With lazy.nvim: >lua
     {
-      "Cannon07/code-preview.nvim",
+      "Timo-In/code-preview.nvim",
       config = function()
         require("code-preview").setup()
       end,
@@ -55,13 +55,14 @@ Full default configuration. These values are copied verbatim from
 `lua/code-preview/init.lua` and are the source of truth for every option: >lua
     require("code-preview").setup({
       debug = false,  -- enable debug logging to stdpath("log")/code-preview.log
+      hooks = {
+        terminal_only = false, -- reject hook RPCs for headless/GUI Neovim instances
+      },
       diff = {
-        layout = "tab",        -- "tab", "vsplit", or "inline"
-        layouts = {},          -- override layout per backend: { opencode = "tab", codex = "vsplit" }
-        labels = { current = "CURRENT", proposed = "PROPOSED" },
-        equalize = true,
-        full_file = true,
         visible_only = false,  -- only show diffs for files open in a visible nvim window
+        auto_close = false,    -- keep marks until manually cleared when false
+        auto_closes = {},      -- per-agent auto_close overrides
+        linger_ms = 1500,      -- fade backgrounds; signs remain until edit/save
         defer_claude_permissions = false,  -- when true, skip permissionDecision and let Claude Code's own settings decide
       },
       neo_tree = {
@@ -87,45 +88,19 @@ Full default configuration. These values are copied verbatim from
       keys = {
         -- Set any entry to false to skip that binding. Set `keys = false` to skip all.
         -- <Plug>(CodePreviewCloseAll) is always defined so users can map it themselves.
-        next_change = "]c",        -- buffer-local in inline diff buffers
-        prev_change = "[c",        -- buffer-local in inline diff buffers
         close_all   = "<leader>dq", -- global; close diff and clear indicators
-      },
-      highlights = {
-        current = {
-          DiffAdd    = { bg = "#4c2e2e" },
-          DiffDelete = { bg = "#4c2e2e" },
-          DiffChange = { bg = "#4c3a2e" },
-          DiffText   = { bg = "#5c3030" },
-        },
-        proposed = {
-          DiffAdd    = { bg = "#2e4c2e" },
-          DiffDelete = { bg = "#4c2e2e" },
-          DiffChange = { bg = "#2e3c4c" },
-          DiffText   = { bg = "#3e5c3e" },
-        },
-        inline = {
-          added        = { bg = "#2e4c2e" },
-          removed      = { bg = "#4c2e2e" },
-          added_text   = { bg = "#3a6e3a" },
-          removed_text = { bg = "#6e3a3a" },
-        },
       },
     })
 <
 Option notes ~
 
-                                                   *code-preview-config-layout*
-diff.layout         "tab" (default) | "vsplit" | "inline". Selects how a
-                    preview is rendered. "tab" and "vsplit" use the
-                    side-by-side renderer; "inline" uses the unified-diff
-                    renderer (with `]c`/`[c` navigation).
+                                           *code-preview-config-terminal-only*
+hooks.terminal_only When true, agent hooks target only Neovim instances with
+                    an attached terminal UI. GUI and headless instances are
+                    skipped. Defaults to false for compatibility.
 
-                                                  *code-preview-config-layouts*
-diff.layouts        Per-agent layout override, keyed by agent id:
-                    `claudecode`, `opencode`, `copilot`, `codex`. Any agent
-                    not listed falls back to `diff.layout`.
-                    Example: `layouts = { codex = "inline" }`.
+All previews use the real file buffer with extmark highlights. A file already
+visible in a window is reused; an unseen file opens in its own tab.
 
 diff.visible_only   When true, suppress previews for files not visible in any
                     Neovim window. Change indicators still fire. Toggle at
@@ -207,8 +182,6 @@ Defaults (all configurable via the `keys` table, see |code-preview-config|):
 
   <leader>dq    global              Close the diff and clear indicators
                                     (same as `:CodePreviewCloseDiff`).
-  ]c            inline diff buffer  Jump to the next change.
-  [c            inline diff buffer  Jump to the previous change.
 
                                               *<Plug>(CodePreviewCloseAll)*
 A `<Plug>(CodePreviewCloseAll)` mapping is always defined, regardless of the

@@ -743,4 +743,14 @@ function M.detect(cmd, cwd)
   }
 end
 
+--- Resolve a path token against cwd using the active OS path adapter.
+--- @param token string
+--- @param cwd string
+--- @return string?
+function M.resolve_path(token, cwd)
+  local adapter = path_adapter()
+  local cleaned = adapter.clean(token)
+  return adapter.resolve(cleaned, cwd)
+end
+
 return M

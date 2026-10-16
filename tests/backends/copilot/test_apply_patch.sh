@@ -48,6 +48,7 @@ run_copilot_post_patch() {
 
 setup_test_project
 start_nvim
+nvim_exec "require('code-preview').config.diff.auto_close = true"
 
 # ── Test: single-file update via apply_patch ────────────────────
 

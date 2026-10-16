@@ -35,7 +35,7 @@ Do not say "tool use" or "tool call" in plugin-side docs — those are agent-sid
 
 ## Preview
 
-The per-file unit of pending review. One open diff tab (or vsplit, or inline buffer) keyed by absolute file path in `active_diffs`. A preview *contains* a diff; "diff" is the content (added/removed lines), "preview" is the thing the user opens, scrolls, and closes.
+The per-file unit of pending review. One real file buffer, keyed by absolute file path in `active_diffs`, displays its changes with extmarks. A file already visible in a window is reused; an unseen file opens in its own tab. A preview *contains* a diff; "diff" is the content (added/removed lines), "preview" is the thing the user opens, scrolls, and closes.
 
 Lifecycle: a [proposal](#proposal) creates one or more previews → the user reviews them → the agent's post-tool hook closes the matching previews (whether the user accepted or rejected on the agent's side).
 
@@ -57,9 +57,9 @@ The act of finding which running Neovim instance to address an RPC call at. Reso
 4. Glob `/tmp/${NVIM_APPNAME}.*/0` (Linux + some macOS setups).
 5. Glob `$XDG_RUNTIME_DIR/${NVIM_APPNAME}.*.0` (NixOS, systemd-based distros).
 
-If multiple instances match, prefer the one whose cwd matches (or is a parent of) the project cwd passed in by the calling hook.
+Every responsive candidate is asked whether its current project matches the hook cwd. If no instance matches, discovery abstains instead of falling back to an unrelated Neovim. Among matching instances, an already-open target buffer is preferred, then the newest instance.
 
-On **Windows** (issue #46) the addressable target is a named pipe (`\\.\pipe\nvim.<pid>.0`) rather than a Unix socket. The [pidfile](#pidfile) is the primary path; the Unix glob fallbacks (steps 3–5) are replaced by a single **pipe-enumeration fallback** — list `\\.\pipe\`, keep names matching `nvim.*`, probe each for responsiveness. Pipe enumeration cannot run the cwd tiebreak (Windows has no `/proc` or `lsof` to read a process's cwd, and a pipe found this way has no pidfile cwd line), so it degrades to "first responsive pipe," mirroring how the Unix glob path degrades when the cwd lookup fails. The stale-pipe responsiveness probe (`nvim --server <pipe> --remote-expr "1"`) is unchanged in shape; only the is-socket precheck is dropped (named pipes have no reliable existence test).
+On **Windows** (issue #46) the addressable target is a named pipe (`\\.\pipe\nvim.<pid>.0`) rather than a Unix socket. The [pidfile](#pidfile) is the primary path; the Unix glob fallbacks (steps 3–5) are replaced by a single **pipe-enumeration fallback** — list `\\.\pipe\`, keep names matching `nvim.*`, then ask each responsive instance to validate the hook project. The stale-pipe responsiveness probe (`nvim --server <pipe> --remote-expr "1"`) is unchanged in shape; only the is-socket precheck is dropped (named pipes have no reliable existence test).
 
 ## Pidfile
 
@@ -124,7 +124,7 @@ Two levels of fidelity for handling `Bash` proposals.
 
 ## Source path / File path / Display path
 
-Three distinct path concepts used together in the [preview](#preview) pipeline. They are *not* interchangeable; the current code muddles them (see [issue #55](https://github.com/Cannon07/code-preview.nvim/issues/55)).
+Three distinct path concepts used together in the [preview](#preview) pipeline. They are *not* interchangeable; the current code muddles them (see [upstream issue #55](https://github.com/Cannon07/code-preview.nvim/issues/55)).
 
 - **Source path** — a temp file holding pre-rendered content (`/tmp/code-preview-diff-{original,proposed}-<id>`). One pair per preview: `original_source_path` and `proposed_source_path`. Scratch files, not the real file.
 - **File path** — the absolute canonical path of the real file being edited. The *identity*: used as the key in `active_diffs`, passed to the [changes](#change) registry, used by neo-tree reveal.
@@ -134,7 +134,7 @@ When in doubt: identity = file path; content = source path; UI label = display p
 
 ## Visible-only mode
 
-Opt-in restriction (`diff.visible_only` config, default `false`) that suppresses [previews](#preview) for files not currently visible in any Neovim window. The [core handler](#core-handler) asks the running Neovim via `hook_context()` whether the target file is in any window's visible buffer; if `visible_only` is on and the file isn't visible, the preview is skipped entirely (no diff tab, no inline buffer). [Change indicators](#indicator) in neo-tree still fire — visible-only mode is about avoiding *modal* interruption, not about hiding that the edit happened.
+Opt-in restriction (`diff.visible_only` config, default `false`) that suppresses [previews](#preview) for files not currently visible in any Neovim window. The [core handler](#core-handler) asks the running Neovim via `hook_context()` whether the target file is in any window's visible buffer; if `visible_only` is on and the file isn't visible, the preview is skipped entirely. [Change indicators](#indicator) in neo-tree still fire — visible-only mode is about avoiding *modal* interruption, not about hiding that the edit happened.
 
 Toggled at runtime via `:CodePreviewToggleVisibleOnly`.
 
@@ -148,18 +148,14 @@ The pause window between an agent firing the pre-tool hook and the agent actuall
 
 The plugin doesn't *implement* the gate; it lives inside the agent. The plugin's job is to make sure the gate fires (Claude Code's case) and to render a useful preview *during* the gate.
 
-## Layout
-
-The user-facing config value (`diff.layout`) that selects how a [preview](#preview) is rendered. Three values: `"tab"`, `"vsplit"`, `"inline"`. The first two share one [renderer](#renderer); `"inline"` uses the other.
-
 ## Renderer
 
-The internal rendering path. Two of them:
-
-- **Side-by-side renderer** — opens a CURRENT and a PROPOSED buffer in two windows, uses Neovim's built-in `:diffthis`. Used by both `tab` and `vsplit` layouts (the only difference is whether the windows live in a new tab or a vsplit of the current one). The legacy default.
-- **Inline renderer** — single buffer showing a unified-diff view, with character-level highlights, `]c` / `[c` navigation, and a custom statuscolumn displaying old|new line numbers. Implemented in `build_inline_diff` + `inline_statuscolumn` in `lua/code-preview/diff.lua`.
-
-The inline renderer is the strategic direction — see [ADR-0003](docs/adr/0003-inline-renderer-as-future-default.md). The side-by-side renderer is kept available but is no longer where new rendering features land.
+The single internal rendering path. It loads proposed content into the real file
+buffer and uses extmarks for changed-line backgrounds, deleted virtual lines,
+and sign-column markers. `lua/code-preview/renderer.lua` owns rendering and its
+persistent edit/save cleanup hooks. `lua/code-preview/diff.lua` computes hook
+previews, while `lua/code-preview/in_place.lua` applies Go daemon updates. Both
+paths use the same renderer and tab policy. See [ADR-0003](docs/adr/0003-inline-renderer-as-future-default.md).
 
 ## Reveal
 

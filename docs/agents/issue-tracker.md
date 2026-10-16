@@ -1,6 +1,6 @@
 # Issue tracker: GitHub
 
-Issues and PRDs for this repo live as GitHub issues in `Cannon07/code-preview`. Use the `gh` CLI for all operations.
+Issues and PRDs for this repo live as GitHub issues in `Timo-In/code-preview.nvim`. Use the `gh` CLI for all operations.
 
 ## Conventions
 

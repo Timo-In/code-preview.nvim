@@ -33,14 +33,14 @@ INPUT="$(cat)"
 # claudecode filters via its settings.json matcher, opencode via its TS allowlist.
 case "$BACKEND" in
   codex)
-    TOOL="$(printf '%s' "$INPUT" | jq -r '.tool_name // empty' 2>/dev/null || true)"
+    TOOL="$(printf '%s' "$INPUT" | jq -r '.tool_name // .name // empty' 2>/dev/null || true)"
     case "$TOOL" in
       ""|read|view|glob|grep|ls|list_files) exit 0 ;;
       mcp__*) exit 0 ;;
     esac
     ;;
   copilot)
-    TOOL="$(printf '%s' "$INPUT" | jq -r '.toolName // empty' 2>/dev/null || true)"
+    TOOL="$(printf '%s' "$INPUT" | jq -r '.toolName // .name // empty' 2>/dev/null || true)"
     case "$TOOL" in
       ""|view|glob|grep|ls|report_intent) exit 0 ;;
     esac
@@ -48,18 +48,25 @@ case "$BACKEND" in
 esac
 
 CWD="$(printf '%s' "$INPUT" | jq -r '.cwd // empty' 2>/dev/null || true)"
+[[ -z "$CWD" ]] && CWD="$PWD"
+
+TARGET_FILE="$(printf '%s' "$INPUT" | jq -r '.tool_input.file_path // .file_path // .args.filePath // .args.path // empty' 2>/dev/null || true)"
+if [[ -z "$TARGET_FILE" ]]; then
+  TARGET_FILE="$(printf '%s' "$INPUT" | grep -oE '\*\*\* (Update|Add|Delete) File:[[:space:]]*[^"[:space:]]+' | head -1 | sed -E 's/\*\*\* (Update|Add|Delete) File:[[:space:]]*//' || true)"
+fi
 
 # Socket discovery — silent failure is fine, we abstain below.
-source "$BIN_DIR/nvim-socket.sh" "$CWD" 2>/dev/null || true
+source "$BIN_DIR/nvim-socket.sh" "$CWD" "$TARGET_FILE" 2>/dev/null || true
 source "$BIN_DIR/nvim-call.sh"
 
 if [[ -z "${NVIM_SOCKET:-}" ]]; then
   exit 0
 fi
 
-# Splice the raw payload verbatim into the RPC args array [payload, backend] —
-# never re-serialise it. Malformed payload (jq fails) → abstain.
-ARGS="$(jq -nc --argjson r "$INPUT" --arg b "$BACKEND" '[$r, $b]' 2>/dev/null || true)"
+# Splice the raw payload verbatim into the RPC args array. CWD is included as a
+# separate routing assertion so the in-process handler can re-check the target.
+# Never re-serialise it. Malformed payload (jq fails) → abstain.
+ARGS="$(jq -nc --argjson r "$INPUT" --arg b "$BACKEND" --arg cwd "$CWD" '[$r, $b, $cwd]' 2>/dev/null || true)"
 [[ -z "$ARGS" ]] && exit 0
 
 case "$EVENT" in

@@ -43,7 +43,10 @@ end
 -- the hook fires. Harmless on Unix (no such tool is ever emitted there).
 local TOOL_MATCHER = "Edit|Write|MultiEdit|Bash|PowerShell"
 
-local function settings_path()
+local function settings_path(scope)
+  if scope == "global" then
+    return vim.fn.expand("~/.claude/settings.json")
+  end
   return vim.fn.getcwd() .. "/.claude/settings.local.json"
 end
 
@@ -69,7 +72,7 @@ end
 -- This lets users who installed with the old name uninstall after upgrading.
 local function remove_ours(list)
   local filtered = {}
-  for _, entry in ipairs(list) do
+  for _, entry in ipairs(list or {}) do
     local cmd = ""
     if entry.hooks and entry.hooks[1] then
       cmd = tostring(entry.hooks[1].command or "")
@@ -81,7 +84,26 @@ local function remove_ours(list)
   return filtered
 end
 
-function M.install()
+--- True iff target scope has our hook installed.
+--- @param scope string? "global"|"local"|nil
+--- @return boolean
+function M.is_installed(scope)
+  if scope then
+    local path = settings_path(scope)
+    local f = io.open(path, "r")
+    if not f then return false end
+    local content = f:read("*a") or ""
+    f:close()
+    return is_our_command(content)
+  end
+  return M.is_installed("local") or M.is_installed("global")
+end
+
+--- Install Claude Code hooks into target scope ("global" or "local").
+--- Defaults to "global" so hooks work seamlessly across all projects.
+--- @param scope string? "global"|"local"
+function M.install(scope)
+  scope = (scope == "local") and "local" or "global"
   -- One generic shim per OS, parameterized by backend + event (ADR-0008).
   local hook = bin_dir() .. "/hook-entry" .. platform.script_ext()
 
@@ -89,8 +111,9 @@ function M.install()
     vim.notify("[code-preview] hook script not found: " .. hook, vim.log.levels.ERROR)
     return
   end
+  platform.make_executable(hook)
 
-  local path = settings_path()
+  local path = settings_path(scope)
   local data = read_settings(path)
 
   -- Initialise missing structure
@@ -113,35 +136,43 @@ function M.install()
   })
 
   write_settings(path, data)
-  vim.notify("[code-preview] Hooks installed → " .. path, vim.log.levels.INFO)
+  vim.notify(string.format("[code-preview] Claude Code hooks installed (%s) → %s", scope, path), vim.log.levels.INFO)
 end
 
---- Report whether the Claude Code hooks are wired up in this project.
---- @return { state: "installed"|"missing", warnings: string[]? }
+--- Report whether the Claude Code hooks are wired up.
+--- @return { state: "installed (global)"|"installed (local)"|"installed (local+global)"|"missing", warnings: string[]? }
 function M.install_state()
-  local path = settings_path()
-  local f = io.open(path, "r")
-  if not f then return { state = "missing" } end
-  local content = f:read("*a") or ""
-  f:close()
-  if is_our_command(content) then return { state = "installed" } end
-  return { state = "missing" }
-end
+  local local_ok = M.is_installed("local")
+  local global_ok = M.is_installed("global")
 
-function M.uninstall()
-  local path = settings_path()
-  local data = read_settings(path)
-
-  if not data.hooks then
-    vim.notify("[code-preview] No hooks found in " .. path, vim.log.levels.WARN)
-    return
+  if not local_ok and not global_ok then
+    return { state = "missing" }
   end
 
-  data.hooks.PreToolUse  = remove_ours(data.hooks.PreToolUse or {})
-  data.hooks.PostToolUse = remove_ours(data.hooks.PostToolUse or {})
+  local scope_desc = (local_ok and global_ok and "local+global")
+    or (local_ok and "local")
+    or "global"
 
-  write_settings(path, data)
-  vim.notify("[code-preview] Hooks removed from " .. path, vim.log.levels.INFO)
+  return { state = "installed (" .. scope_desc .. ")" }
+end
+
+--- Uninstall Claude Code hooks from target scope ("global", "local", or both if nil).
+--- @param scope string? "global"|"local"|nil
+function M.uninstall(scope)
+  scope = (scope == "global" or scope == "local") and scope or nil
+  local scopes_to_clean = scope and { scope } or { "local", "global" }
+  for _, s in ipairs(scopes_to_clean) do
+    local path = settings_path(s)
+    if vim.fn.filereadable(path) == 1 then
+      local data = read_settings(path)
+      if data.hooks then
+        data.hooks.PreToolUse  = remove_ours(data.hooks.PreToolUse or {})
+        data.hooks.PostToolUse = remove_ours(data.hooks.PostToolUse or {})
+        write_settings(path, data)
+        vim.notify(string.format("[code-preview] Claude Code hooks uninstalled (%s) from %s", s, path), vim.log.levels.INFO)
+      end
+    end
+  end
 end
 
 return M

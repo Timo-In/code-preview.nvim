@@ -110,4 +110,33 @@ describe("pre_tool.handle (robustness)", function()
       pre_tool.handle({ tool_name = "Bash", cwd = "/proj" }, "claudecode")
     end)
   end)
+
+  it("rejects a routed request from another project", function()
+    local other = vim.fn.tempname()
+    vim.fn.mkdir(other, "p")
+    pre_tool.handle(payload("Bash", { command = "rm should-not-register.txt" }), "claudecode", other)
+    assert.equals(0, vim.tbl_count(changes.get_all()))
+    vim.fn.delete(other, "rf")
+  end)
+end)
+
+describe("pre_tool tempfile cleanup", function()
+  it("preserves fresh files from other Neovim instances and removes stale files", function()
+    local dir = os.getenv("TMPDIR") or "/tmp"
+    dir = dir:gsub("/$", "")
+    local suffix = tostring(vim.uv.hrtime())
+    local fresh = dir .. "/code-preview-diff-original-fresh-" .. suffix
+    local stale = dir .. "/code-preview-diff-proposed-stale-" .. suffix
+    vim.fn.writefile({ "fresh" }, fresh)
+    vim.fn.writefile({ "stale" }, stale)
+    local old = os.time() - (8 * 24 * 60 * 60)
+    assert.is_true(vim.uv.fs_utime(stale, old, old))
+
+    pre_tool.sweep_leftover_tempfiles()
+
+    assert.equals(1, vim.fn.filereadable(fresh))
+    assert.equals(0, vim.fn.filereadable(stale))
+    pcall(vim.uv.fs_unlink, fresh)
+    pcall(vim.uv.fs_unlink, stale)
+  end)
 end)

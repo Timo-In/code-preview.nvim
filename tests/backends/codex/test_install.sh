@@ -27,7 +27,7 @@ rm -f "$GLOBAL_CONFIG_FILE"
 
 test_install_codex_hooks() {
   rm -rf "$TEST_PROJECT_DIR/.codex"
-  nvim_exec "require('code-preview.backends.codex').install()"
+  nvim_exec "require('code-preview.backends.codex').install('local')"
   sleep 0.3
 
   assert_file_exists "$HOOKS_FILE" "hooks.json should be created" || return 1
@@ -56,8 +56,8 @@ test_install_codex_hooks() {
 # inserting on every install.
 test_install_idempotent() {
   rm -rf "$TEST_PROJECT_DIR/.codex"
-  nvim_exec "require('code-preview.backends.codex').install()"
-  nvim_exec "require('code-preview.backends.codex').install()"
+  nvim_exec "require('code-preview.backends.codex').install('local')"
+  nvim_exec "require('code-preview.backends.codex').install('local')"
   sleep 0.3
 
   local pre_count post_count
@@ -90,7 +90,7 @@ test_install_preserves_user_hooks() {
 }
 EOF
 
-  nvim_exec "require('code-preview.backends.codex').install()"
+  nvim_exec "require('code-preview.backends.codex').install('local')"
   sleep 0.3
 
   # Both user entries must survive.
@@ -123,9 +123,9 @@ test_uninstall_preserves_user_hooks() {
 }
 EOF
 
-  nvim_exec "require('code-preview.backends.codex').install()"
+  nvim_exec "require('code-preview.backends.codex').install('local')"
   sleep 0.2
-  nvim_exec "require('code-preview.backends.codex').uninstall()"
+  nvim_exec "require('code-preview.backends.codex').uninstall('local')"
   sleep 0.2
 
   # File should still exist (we don't delete it — user may have other entries).
@@ -255,7 +255,7 @@ test_install_refuses_corrupted_hooks_json() {
   local original_content
   original_content="$(cat "$HOOKS_FILE")"
 
-  nvim_exec "require('code-preview.backends.codex').install()"
+  nvim_exec "require('code-preview.backends.codex').install('local')"
   sleep 0.3
 
   # File contents must be unchanged.
@@ -266,7 +266,7 @@ test_install_refuses_corrupted_hooks_json() {
 
   # is_installed should still be false because we bailed.
   local installed
-  installed="$(nvim_eval "require('code-preview.backends.codex').is_installed()")"
+  installed="$(nvim_eval "require('code-preview.backends.codex').is_installed('local')")"
   assert_eq "false" "$installed" "install should not register after bailing on corrupt JSON" || return 1
 }
 
@@ -280,7 +280,7 @@ test_uninstall_handles_corrupted_hooks_json() {
   local original_content
   original_content="$(cat "$HOOKS_FILE")"
 
-  nvim_exec "require('code-preview.backends.codex').uninstall()"
+  nvim_exec "require('code-preview.backends.codex').uninstall('local')"
   sleep 0.3
 
   local after_content
@@ -295,19 +295,19 @@ test_is_installed_detection() {
   rm -rf "$TEST_PROJECT_DIR/.codex"
 
   local before
-  before="$(nvim_eval "require('code-preview.backends.codex').is_installed()")"
+  before="$(nvim_eval "require('code-preview.backends.codex').is_installed('local')")"
   assert_eq "false" "$before" "is_installed should be false when nothing is set up" || return 1
 
-  nvim_exec "require('code-preview.backends.codex').install()"
+  nvim_exec "require('code-preview.backends.codex').install('local')"
   sleep 0.2
   local after
-  after="$(nvim_eval "require('code-preview.backends.codex').is_installed()")"
+  after="$(nvim_eval "require('code-preview.backends.codex').is_installed('local')")"
   assert_eq "true" "$after" "is_installed should be true after install" || return 1
 
-  nvim_exec "require('code-preview.backends.codex').uninstall()"
+  nvim_exec "require('code-preview.backends.codex').uninstall('local')"
   sleep 0.2
   local removed
-  removed="$(nvim_eval "require('code-preview.backends.codex').is_installed()")"
+  removed="$(nvim_eval "require('code-preview.backends.codex').is_installed('local')")"
   assert_eq "false" "$removed" "is_installed should be false after uninstall" || return 1
 }
 

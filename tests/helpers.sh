@@ -81,7 +81,7 @@ create_test_file() {
 # ── Neovim lifecycle ─────────────────────────────────────────────
 
 start_nvim() {
-  start_nvim_on_socket "$PWD"
+  start_nvim_on_socket "${TEST_PROJECT_DIR:-$PWD}"
 }
 
 # start_nvim_on_socket [nvim_cwd]

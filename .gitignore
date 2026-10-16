@@ -21,3 +21,13 @@ test_output.log
 
 # Generated vimdoc tags (plugin managers regenerate via :helptags)
 doc/tags
+
+# Go daemon binary
+bin/previewd
+
+# Beads / Dolt files (added by bd init)
+.dolt/
+*.db
+.beads-credential-key
+.beads/proxieddb/
+*.gate.lock*

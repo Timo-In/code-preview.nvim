@@ -6,7 +6,7 @@ Pointers for AI coding agents working in this repository.
 
 ### Issue tracker
 
-Issues live in the `Cannon07/code-preview` GitHub repo; skills use the `gh` CLI. See `docs/agents/issue-tracker.md`.
+Issues live in the `Timo-In/code-preview.nvim` GitHub repo; skills use the `gh` CLI. See `docs/agents/issue-tracker.md`.
 
 ### Triage labels
 

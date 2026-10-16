@@ -9,7 +9,6 @@
 // See docs/adr/0008-one-hook-entry-per-os.md — OpenCode shares the same
 // per-OS shim as the other agents rather than owning its own.
 
-import type { Plugin } from "@opencode-ai/plugin"
 import { execSync } from "child_process"
 import { existsSync, readFileSync } from "fs"
 import { resolve, dirname } from "path"
@@ -158,24 +157,56 @@ function enqueueHook(fn: () => void | Promise<void>): Promise<void> {
 
 // ── Plugin entry point ───────────────────────────────────────────
 
-const plugin: Plugin = async ({ directory }) => {
-  return {
-    "tool.execute.before": async (input, output) => {
-      if (!PREVIEW_TOOLS.has(input.tool)) return
-      const args = (output.args as Record<string, any>) ?? {}
-      const payload = { tool: input.tool, args, cwd: directory }
-      await enqueueHook(() => runHook("pre", payload))
-    },
-
-    "tool.execute.after": async (input, _output) => {
-      if (!PREVIEW_TOOLS.has(input.tool)) return
-      // OpenCode's after-hook carries the tool args on `input` (the before-hook
-      // carries them on `output`), confirmed on the live API (issue #46).
-      const args = ((input as any).args as Record<string, any>) ?? {}
-      const payload = { tool: input.tool, args, cwd: directory }
-      await enqueueHook(() => runHook("post", payload))
-    },
+export interface PluginContext {
+  location?: string | {
+    directory?: string
   }
+  tool?: {
+    hook: (
+      event: "execute.before" | "execute.after",
+      handler: (data: any) => Promise<void> | void,
+    ) => Promise<void> | void
+  }
+}
+
+function projectDirectory(ctx: PluginContext | any): string {
+  const location = ctx?.location
+  if (typeof location === "string" && location) return location
+  if (typeof location?.directory === "string" && location.directory) {
+    return location.directory
+  }
+  return process.cwd()
+}
+
+// OpenCode v2 plugin export.
+// OpenCode v2 requires a default object with `id` and `setup` function.
+const plugin = {
+  id: "code-preview",
+  setup: async (ctx: PluginContext | any) => {
+    const cwd = projectDirectory(ctx)
+
+    if (ctx?.tool?.hook) {
+      await ctx.tool.hook("execute.before", async (event: any) => {
+        if (!event || !PREVIEW_TOOLS.has(event.tool)) return
+        const args = (event.input as Record<string, any>) ?? {}
+        if (args.path && !args.filePath) {
+          args.filePath = args.path
+        }
+        const payload = { tool: event.tool, args, cwd }
+        await enqueueHook(() => runHook("pre", payload))
+      })
+
+      await ctx.tool.hook("execute.after", async (event: any) => {
+        if (!event || !PREVIEW_TOOLS.has(event.tool)) return
+        const args = (event.input as Record<string, any>) ?? {}
+        if (args.path && !args.filePath) {
+          args.filePath = args.path
+        }
+        const payload = { tool: event.tool, args, cwd }
+        await enqueueHook(() => runHook("post", payload))
+      })
+    }
+  },
 }
 
 export default plugin

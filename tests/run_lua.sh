@@ -22,28 +22,21 @@ fi
 
 FILTER="${1:-}"
 TEST_DIR="$REPO_ROOT/tests/plugin"
+SPECS=()
 
-if [[ -n "$FILTER" ]]; then
-  # Find matching spec files
-  SPECS=()
-  while IFS= read -r f; do
-    [[ -n "$f" ]] && SPECS+=("$f")
-  done < <(find "$TEST_DIR" -name "*${FILTER}*_spec.lua" -type f 2>/dev/null | sort)
+while IFS= read -r spec; do
+  [[ -n "$spec" ]] && SPECS+=("$spec")
+done < <(find "$TEST_DIR" -name "*${FILTER}*_spec.lua" -type f 2>/dev/null | sort)
 
-  if (( ${#SPECS[@]} == 0 )); then
-    echo "No spec files matched filter: $FILTER"
-    exit 1
-  fi
+if (( ${#SPECS[@]} == 0 )); then
+  echo "No spec files matched filter: ${FILTER:-<all>}"
+  exit 1
+fi
 
-  for spec in "${SPECS[@]}"; do
-    echo "Running: $(basename "$spec")"
-    nvim --headless --clean \
-      -u "$REPO_ROOT/tests/minimal_init.lua" \
-      -c "PlenaryBustedFile $spec {minimal_init = '$REPO_ROOT/tests/minimal_init.lua'}" 2>&1
-  done
-else
-  echo "Running all plugin specs..."
+echo "Running ${#SPECS[@]} plugin spec file(s) in isolated Neovim processes..."
+for spec in "${SPECS[@]}"; do
+  echo "Running: $(basename "$spec")"
   nvim --headless --clean \
     -u "$REPO_ROOT/tests/minimal_init.lua" \
-    -c "PlenaryBustedDirectory $TEST_DIR {minimal_init = '$REPO_ROOT/tests/minimal_init.lua'}" 2>&1
-fi
+    -c "lua require('plenary.busted').run([[$spec]])" 2>&1
+done

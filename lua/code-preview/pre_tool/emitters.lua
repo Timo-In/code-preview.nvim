@@ -20,7 +20,7 @@ local CLAUDECODE_EMIT_TOOLS = { Edit = true, Write = true, MultiEdit = true }
 
 local function claudecode(ctx)
   if ctx.defer_claude_permissions then return "" end
-  if not CLAUDECODE_EMIT_TOOLS[ctx.tool_name or ""] then return "" end
+  if not (CLAUDECODE_EMIT_TOOLS[ctx.tool_name or ""] or ctx.has_preview) then return "" end
   -- Hand-built JSON: vim.json.encode doesn't preserve table key order, so
   -- the string varies across Lua hash seeds. The downstream consumer
   -- (Claude Code) doesn't care about order, but the shell-level tests

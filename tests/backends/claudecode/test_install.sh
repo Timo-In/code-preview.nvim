@@ -12,7 +12,7 @@ nvim_exec "vim.cmd('cd $TEST_PROJECT_DIR')"
 # ── Test: Install Claude Code hooks ──────────────────────────────
 
 test_install_claude_hooks() {
-  nvim_exec "require('code-preview.backends.claudecode').install()"
+  nvim_exec "require('code-preview.backends.claudecode').install('local')"
   sleep 0.3
 
   local settings_file="$TEST_PROJECT_DIR/.claude/settings.local.json"
@@ -39,11 +39,11 @@ test_install_claude_hooks() {
 
 test_uninstall_claude_hooks() {
   # Install first
-  nvim_exec "require('code-preview.backends.claudecode').install()"
+  nvim_exec "require('code-preview.backends.claudecode').install('local')"
   sleep 0.2
 
   # Then uninstall
-  nvim_exec "require('code-preview.backends.claudecode').uninstall()"
+  nvim_exec "require('code-preview.backends.claudecode').uninstall('local')"
   sleep 0.2
 
   local settings_file="$TEST_PROJECT_DIR/.claude/settings.local.json"
@@ -59,8 +59,8 @@ test_uninstall_claude_hooks() {
 # ── Test: Install is idempotent (no duplicates) ─────────────────
 
 test_install_idempotent() {
-  nvim_exec "require('code-preview.backends.claudecode').install()"
-  nvim_exec "require('code-preview.backends.claudecode').install()"
+  nvim_exec "require('code-preview.backends.claudecode').install('local')"
+  nvim_exec "require('code-preview.backends.claudecode').install('local')"
   sleep 0.2
 
   local settings_file="$TEST_PROJECT_DIR/.claude/settings.local.json"
@@ -89,7 +89,7 @@ test_install_preserves_existing() {
 }
 JSON
 
-  nvim_exec "require('code-preview.backends.claudecode').install()"
+  nvim_exec "require('code-preview.backends.claudecode').install('local')"
   sleep 0.2
 
   local content

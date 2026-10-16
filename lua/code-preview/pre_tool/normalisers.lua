@@ -80,8 +80,9 @@ local function opencode(raw)
 
   local tool_input = {}
 
-  if args.filePath ~= nil then
-    tool_input.file_path = resolve_path(args.filePath, cwd)
+  local fp = args.filePath or args.path or args.file_path
+  if fp ~= nil then
+    tool_input.file_path = resolve_path(fp, cwd)
   end
   if args.oldString  ~= nil then tool_input.old_string  = args.oldString  end
   if args.newString  ~= nil then tool_input.new_string  = args.newString  end
@@ -231,10 +232,67 @@ end
 -- tool_input.file_path, which canonical ApplyPatch doesn't carry, so any
 -- such payload would have been silently dropped. Nothing emits canonical
 -- ApplyPatch today, but the new branch checks patch_text correctly.
+local function unescape_js(s)
+  return s:gsub("\\n", "\n")
+          :gsub("\\t", "\t")
+          :gsub('\\"', '"')
+          :gsub("\\'", "'")
+          :gsub("\\\\", "\\")
+end
+
+local function extract_exec_patch_or_cmd(args, cwd)
+  local code = ""
+  if type(args) == "table" then
+    code = args.input or args.code or args.script or args.command or ""
+  elseif type(args) == "string" then
+    code = args
+  end
+  if code == "" then return nil end
+
+  local unescaped = unescape_js(code)
+
+  -- 1. Check for GPT / Unified patch format inside JS string
+  local patch = unescaped:match("(%*%*%* Begin Patch.-\n%*%*%* End Patch)")
+             or unescaped:match("(%*%*%* Begin Patch.*%*%*%* End Patch)")
+             or unescaped:match("(%*%*%* (?:Update|Add|Delete) File:.-%*%*%* End Patch)")
+
+  if not patch and (unescaped:find("%*%*%* Update File:") or unescaped:find("%*%*%* Add File:") or unescaped:find("%*%*%* Delete File:")) then
+    patch = unescaped:match("(%*%*%* [^\n]+ File:.*)")
+  end
+
+  if patch and patch ~= "" then
+    local workdir = unescaped:match('workdir%s*:%s*["\']([^"\']+)["\']')
+    return {
+      tool_name  = "ApplyPatch",
+      cwd        = (cwd and cwd ~= "") and cwd or (workdir or ""),
+      tool_input = { patch_text = patch },
+    }
+  end
+
+  -- 2. Check for tools.exec_command or shell command inside JS
+  local cmd = unescaped:match('tools%.exec_command%s*%(%s*{.-cmd%s*:%s*"([^"]+)"')
+           or unescaped:match("tools%.exec_command%s*%(%s*{.-cmd%s*:%s*'([^']+)'")
+           or unescaped:match('cmd%s*:%s*"([^"]+)"')
+           or unescaped:match("cmd%s*:%s*'([^']+)'")
+           or unescaped:match('const%s+cmds%s*=%s*%[%s*"([^"]+)"')
+           or unescaped:match("const%s+cmds%s*=%s*%[%s*'([^']+)'")
+
+  if cmd and cmd ~= "" then
+    local workdir = unescaped:match('workdir%s*:%s*["\']([^"\']+)["\']')
+    return {
+      tool_name  = "Bash",
+      cwd        = (cwd and cwd ~= "") and cwd or (workdir or ""),
+      tool_input = { command = cmd },
+    }
+  end
+
+  return nil
+end
+
 local function codex(raw)
-  local tool = (raw and raw.tool_name) or ""
+  local tool = (raw and (raw.tool_name or raw.name)) or ""
   local cwd  = (raw and raw.cwd) or ""
-  local args = (raw and raw.tool_input) or {}
+  local args = (raw and (raw.tool_input or raw.input)) or {}
 
   local function blank(s) return s == nil or s == "" end
 
@@ -252,6 +310,12 @@ local function codex(raw)
       return { tool_name = nil, cwd = cwd, tool_input = {} }
     end
     return { tool_name = "ApplyPatch", cwd = cwd, tool_input = args }
+  elseif tool == "exec" or tool == "Exec" then
+    local extracted = extract_exec_patch_or_cmd(args, cwd)
+    if extracted then
+      return extracted
+    end
+    return { tool_name = nil, cwd = cwd, tool_input = {} }
   elseif tool == "Edit" or tool == "Write" then
     local fp = resolve_path(args.file_path, cwd)
     if blank(fp) then

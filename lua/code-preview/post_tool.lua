@@ -52,12 +52,31 @@ end
 --- Handle a normalised PostToolUse hook.
 --- @param raw table  decoded hook payload (per-backend shape)
 --- @param backend string  CODE_PREVIEW_BACKEND value
+--- @param routed_cwd string?  project asserted by the hook-entry resolver
 --- @return string  always empty — post-tool produces no stdout for any backend
-function M.handle(raw, backend)
+function M.handle(raw, backend, routed_cwd)
   local input = normalisers.normalise(raw, backend)
   local tool_name = input and input.tool_name
 
+  if routed_cwd then
+    local target_file = input and input.tool_input and input.tool_input.file_path or nil
+    if not require("code-preview.hook_target").matches_project(routed_cwd, target_file) then
+      log.warn(log.fmt("post_tool: rejected cross-project route cwd=%s target=%s",
+        tostring(routed_cwd), tostring(target_file)))
+      return ""
+    end
+  end
+
   log.info(log.fmt("post_tool: tool=%s backend=%s", tostring(tool_name), tostring(backend)))
+
+  local cfg = require("code-preview").config or {}
+  local diff_cfg = cfg.diff or {}
+  local auto_close = true
+  if diff_cfg.auto_closes and diff_cfg.auto_closes[backend] ~= nil then
+    auto_close = diff_cfg.auto_closes[backend]
+  elseif diff_cfg.auto_close ~= nil then
+    auto_close = diff_cfg.auto_close
+  end
 
   if tool_name == "Bash" then
     -- Bash pre-hook set deleted / bash_* markers without opening a preview.
@@ -77,20 +96,30 @@ function M.handle(raw, backend)
   end
 
   if tool_name == "ApplyPatch" then
-    local patch_text = input.tool_input and input.tool_input.patch_text
-    if patch_text and patch_text ~= "" then
-      for _, fpath in ipairs(patch_paths(patch_text, input.cwd or "")) do
-        log.info(log.fmt("post_tool: close patch file=%s", fpath))
-        diff.close_for_file(fpath)
+    if auto_close then
+      local patch_text = input.tool_input and input.tool_input.patch_text
+      if patch_text and patch_text ~= "" then
+        for _, fpath in ipairs(patch_paths(patch_text, input.cwd or "")) do
+          log.info(log.fmt("post_tool: close patch file=%s", fpath))
+          diff.close_for_file(fpath)
+        end
       end
+    else
+      log.info("post_tool: keeping ApplyPatch diff open (auto_close = false)")
+      vim.notify("[code-preview] Patch applied by AI. Review in diff tab (<leader>aq to close)", vim.log.levels.INFO, { title = "code-preview" })
     end
     return ""
   end
 
   local file_path = input.tool_input and input.tool_input.file_path
   if file_path and file_path ~= "" then
-    log.info(log.fmt("post_tool: close file=%s", file_path))
-    diff.close_for_file(file_path)
+    if auto_close then
+      log.info(log.fmt("post_tool: close file=%s", file_path))
+      diff.close_for_file(file_path)
+    else
+      log.info(log.fmt("post_tool: keeping file diff open for %s (auto_close = false)", file_path))
+      vim.notify(string.format("[code-preview] %s updated by AI. Review in diff tab (<leader>aq to close)", vim.fn.fnamemodify(file_path, ":t")), vim.log.levels.INFO, { title = "code-preview" })
+    end
   end
 
   return ""

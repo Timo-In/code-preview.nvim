@@ -6,14 +6,12 @@
 
 **Review every edit your AI coding agent makes as a native Neovim diff — before it's written to disk.**
 
-[![CI](https://github.com/Cannon07/code-preview.nvim/actions/workflows/e2e-tests.yml/badge.svg)](https://github.com/Cannon07/code-preview.nvim/actions/workflows/e2e-tests.yml)
-[![Release](https://img.shields.io/github/v/release/Cannon07/code-preview.nvim?label=release)](https://github.com/Cannon07/code-preview.nvim/releases)
+[![CI](https://github.com/Timo-In/code-preview.nvim/actions/workflows/e2e-tests.yml/badge.svg)](https://github.com/Timo-In/code-preview.nvim/actions/workflows/e2e-tests.yml)
+[![Release](https://img.shields.io/github/v/release/Timo-In/code-preview.nvim?label=release)](https://github.com/Timo-In/code-preview.nvim/releases)
 [![Neovim](https://img.shields.io/badge/Neovim-0.10%2B-57A143?logo=neovim&logoColor=white)](https://neovim.io)
-[![License: MIT](https://img.shields.io/github/license/Cannon07/code-preview.nvim)](LICENSE)
+[![License: MIT](https://img.shields.io/github/license/Timo-In/code-preview.nvim)](LICENSE)
 
 Works with **Claude Code**, **OpenCode**, **GitHub Copilot CLI**, and **OpenAI Codex CLI** — on **macOS, Linux, and Windows**.
-
-<img src="assets/diff-preview.png" alt="A proposed AI edit shown as a side-by-side diff in Neovim" width="860">
 
 </div>
 
@@ -31,7 +29,8 @@ Works with **Claude Code**, **OpenCode**, **GitHub Copilot CLI**, and **OpenAI C
 
 Your AI coding agent proposes edits in its terminal — a cramped, scroll-past diff you have to eyeball before typing `y`. **code-preview.nvim** intercepts that moment and opens the proposed change as a real Neovim diff: full syntax highlighting, your colorscheme, your keymaps. Review it like any other diff, then accept or reject in the agent's CLI as usual.
 
-- 🔍 **See edits as native diffs** — side-by-side or GitHub-style inline, before anything touches disk
+- 🔍 **See edits in their real buffers** — extmark highlights show additions, changes, and removals before anything touches disk
+- 🗂️ **One file per tab** — different files never replace the buffer you are reviewing
 - 🤝 **Agent-agnostic** — Claude Code, OpenCode, Copilot CLI, Codex CLI, with more agents planned
 - 🌳 **Neo-tree integration** — your file tree marks what's being modified, created, or deleted
 - 🪶 **No Python** — file transforms run through `nvim --headless -l`; the only hard dep is Neovim 0.10+
@@ -61,7 +60,7 @@ With [lazy.nvim](https://github.com/folke/lazy.nvim):
 
 ```lua
 {
-  "Cannon07/code-preview.nvim",
+  "Timo-In/code-preview.nvim",
   config = function()
     require("code-preview").setup()
   end,
@@ -173,46 +172,39 @@ Each install command has a matching `:CodePreviewUninstall…` counterpart. More
 
 ## Configuration
 
-`setup()` works with zero config. The most common knob is the diff **layout**:
+`setup()` works with zero config. Previews always use the real file buffer with
+extmark highlights. An already-visible file is reused; every other file opens
+in its own tab.
 
 ```lua
 require("code-preview").setup({
+  hooks = {
+    terminal_only = true, -- ignore GUI and headless Neovim instances
+  },
   diff = {
-    layout = "tab",  -- "tab" | "vsplit" | "inline"
+    auto_close = true,
+    linger_ms = 1500,
   },
 })
 ```
 
-| Layout | Description |
-|--------|-------------|
-| `"tab"` (default) | Side-by-side diff in a new tab — CURRENT left, PROPOSED right |
-| `"vsplit"` | Side-by-side as a vertical split in the current tab |
-| `"inline"` | GitHub-style unified diff in one buffer, syntax highlighting preserved, `]c` / `[c` to navigate |
-
-You can also set the layout **per agent** — e.g. inline for Codex, a tab for everything else:
-
-```lua
-require("code-preview").setup({
-  diff = {
-    layout  = "tab",                 -- default for all agents
-    layouts = { codex = "inline" },  -- keys: claudecode | opencode | copilot | codex
-  },
-})
-```
+`hooks.terminal_only` is disabled by default for compatibility. When enabled,
+socket discovery only targets Neovim instances with an attached terminal UI;
+Neovide and other GUI clients are skipped without maintaining a GUI name list.
 
 ### A fuller example
 
-A realistic, opinionated lazy.nvim spec — inline diffs everywhere, a per-agent override, and neo-tree revealing from the git root:
+A realistic lazy.nvim spec with automatic cleanup and neo-tree revealing from the git root:
 
 ```lua
 {
-  "Cannon07/code-preview.nvim",
+  "Timo-In/code-preview.nvim",
   event = "VeryLazy",
   config = function()
     require("code-preview").setup({
       diff = {
-        layout  = "inline",              -- unified GitHub-style diff (the strategic default)
-        layouts = { opencode = "tab" },  -- override the layout per agent, to taste
+        auto_close = true,
+        linger_ms = 1500,
       },
       neo_tree = { reveal_root = "git" }, -- reveal from the git root instead of cwd
     })
@@ -236,8 +228,6 @@ A realistic, opinionated lazy.nvim spec — inline diffs everywhere, a per-agent
 | Key | Scope | Description |
 |-----|-------|-------------|
 | `<leader>dq` | global | Close the diff (same as `:CodePreviewCloseDiff`) |
-| `]c` | inline diff buffer | Jump to next change |
-| `[c` | inline diff buffer | Jump to previous change |
 
 See `:help code-preview-commands` and `:help code-preview-keymaps` for details.
 
@@ -267,7 +257,7 @@ AI Agent (terminal)                              Neovim
    Proposes an Edit                                |
         |                                          |
    Hook/plugin fires ──→ compute diff ──→ RPC → show_diff()
-        |                                          | (side-by-side or inline)
+        |                                          | (real buffer + extmarks)
    CLI: "Accept? (y/n)"                       User reviews diff
         |                                          |
    User accepts/rejects                            |
@@ -331,6 +321,24 @@ vim.api.nvim_create_autocmd({ "FocusGained", "BufEnter", "CursorHold" }, {
 - The old `:ClaudePreview*` commands were removed — use the `:CodePreview*` equivalents
 
 </details>
+
+---
+
+## Project history and acknowledgements
+
+This project is based on [Cannon07/code-preview.nvim](https://github.com/Cannon07/code-preview.nvim). We are grateful to Cannon07 and all upstream contributors for creating the original hook-driven Neovim preview workflow, multi-agent adapters, cross-platform shims, and neo-tree integration.
+
+This repository is now independently maintained at [Timo-In/code-preview.nvim](https://github.com/Timo-In/code-preview.nvim). Building on the upstream foundation, this version adds:
+
+- a Go `previewd` service for live filesystem observation and Neovim RPC updates;
+- a single real-buffer renderer using extmarks, virtual deleted lines, and sign-column markers;
+- one dedicated tab per non-visible file, without replacing unrelated buffers;
+- persistent edit/save cleanup, including protection against delayed daemon events restoring accepted highlights;
+- strict project/worktree routing so hooks and daemons cannot target an unrelated Neovim instance;
+- hardened Claude Code, OpenCode v2, GitHub Copilot CLI, and Codex CLI integrations;
+- daemon disconnect recovery, a local `build.sh`, and expanded Lua, Go, and end-to-end regression coverage.
+
+The original MIT copyright notice remains in [LICENSE](LICENSE).
 
 ---
 

@@ -38,10 +38,7 @@ function M.check()
     warn("Neovim RPC socket not found (start Neovim with --listen or set NVIM_LISTEN_ADDRESS)")
   end
 
-  -- Diff layout
-  local cfg = require("code-preview").config or {}
-  local layout = (cfg.diff and cfg.diff.layout) or "unknown"
-  ok("Diff layout: " .. layout)
+  ok("Preview mode: in-place extmarks (one file per tab)")
 
   -- Pidfile registration — used by hook scripts to find this nvim's socket
   -- without OS-specific socket-glob discovery.

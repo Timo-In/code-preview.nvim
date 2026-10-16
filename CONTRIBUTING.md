@@ -21,7 +21,7 @@ The pipeline, end to end:
 
 3. **Core handler** — `lua/code-preview/pre_tool/init.lua` and `lua/code-preview/post_tool.lua`. The agent-neutral pipeline that runs **in-process** inside the user's Neovim ([ADR-0005](docs/adr/0005-core-handler-runs-in-process.md)). It normalises the proposal, decides whether to show a preview (`visible_only` gating, shell-write detection), computes original/proposed content, and drives the diff. This is where everything that *doesn't* depend on which agent fired lives — including `permissionDecision` emission for Claude Code's [review gate](CONTEXT.md#review-gate).
 
-4. **Preview rendering** — `lua/code-preview/diff.lua`. `show_diff()` / `close_diff()`, plus layout resolution (`tab` / `vsplit` share the side-by-side renderer; `inline` is the unified-diff renderer that's the strategic direction, see [ADR-0003](docs/adr/0003-inline-renderer-as-future-default.md)).
+4. **Preview rendering** — `lua/code-preview/diff.lua`, `in_place.lua`, and `renderer.lua`. Every preview uses the real file buffer with extmarks; unseen files open in dedicated tabs (see [ADR-0003](docs/adr/0003-inline-renderer-as-future-default.md)).
 
 An **integration** is the per-agent adapter: an **installer** (`lua/code-preview/backends/<agent>.lua`) that wires the agent's config files to point at the hook entry, plus — for agents that need in-agent glue — adapter code. Only **OpenCode** needs the latter: a TypeScript plugin under `backends/opencode/` that bridges OpenCode's `tool.execute.before/after` API to the shared hook entry. Claude Code, Copilot CLI, and Codex have no `backends/<agent>/` directory — their installers point the agent's native shell-hook config straight at `bin/hook-entry`.
 
@@ -34,7 +34,7 @@ An **integration** is the per-agent adapter: an **installer** (`lua/code-preview
 ```
 lua/code-preview/
 ├── init.lua             setup(), config, user commands
-├── diff.lua             preview rendering: show_diff(), close_diff(), layouts
+├── diff.lua             preview orchestration: show_diff(), close_diff()
 ├── rpc.lua              RPC dispatcher — the shell→Lua boundary
 ├── pidfile.lua          per-Neovim pidfile for socket discovery
 ├── platform.lua         per-OS hook-command construction

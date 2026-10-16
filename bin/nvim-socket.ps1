@@ -11,9 +11,9 @@
 #   2. Pidfile lookup under %LOCALAPPDATA%\code-preview\sockets (preferred path;
 #      written by lua/code-preview/pidfile.lua, same dir formula).
 #   3. Named-pipe enumeration fallback (\\.\pipe\nvim.*).
-# Every candidate is validated with a `--remote-expr "1"` responsiveness probe,
-# which self-heals stale pidfiles left by crashed Neovims. There is no
-# is-socket precheck (named pipes have no reliable existence test on Windows).
+# Every candidate is validated for responsiveness, hook eligibility, and
+# project identity. There is no is-socket precheck (named pipes have no
+# reliable existence test on Windows).
 
 # Probe a server address for responsiveness. We only care about the exit code;
 # all stdout/stderr is discarded.
@@ -35,18 +35,57 @@ function Test-NvimResponsive {
   }
 }
 
+# A live pipe may belong to a GUI or headless Neovim. Ask the plugin whether
+# this instance is eligible before adding it to the hook target candidates.
+function Test-NvimHookTarget {
+  param(
+    [string]$Server,
+    [string]$ProjectCwd = "",
+    [string]$TargetFile = ""
+  )
+  if (-not (Test-NvimResponsive $Server)) { return $false }
+  if ([string]::IsNullOrEmpty($ProjectCwd)) {
+    $expr = 'luaeval("require(''code-preview.hook_target'').is_enabled() and 1 or 0")'
+  } else {
+    $argsJson = ConvertTo-Json -Compress -InputObject @($ProjectCwd, $TargetFile)
+    $expr = 'luaeval("(function() local h=require(''code-preview.hook_target''); return h.is_enabled() and h.matches_project(_A[1], _A[2]) and 1 or 0 end)()", ' + $argsJson + ')'
+  }
+  try {
+    $enabled = & nvim --headless --server $Server --remote-expr $expr 2>$null
+    return ($LASTEXITCODE -eq 0 -and "$enabled".Trim() -eq "1")
+  } catch {
+    return $false
+  }
+}
+
 # Pidfile directory — MUST match lua/code-preview/pidfile.lua's Windows branch
 # (%LOCALAPPDATA%\code-preview\sockets). Both sides compute it independently.
 function Get-PidfileDir {
   return (Join-Path $env:LOCALAPPDATA "code-preview\sockets")
 }
 
+function Test-NvimHasBuffer {
+  param([string]$Server, [string]$TargetFile)
+  if ([string]::IsNullOrEmpty($TargetFile)) { return $false }
+  $targetJson = ConvertTo-Json -Compress -InputObject $TargetFile
+  try {
+    $exists = & nvim --headless --server $Server --remote-expr "bufexists($targetJson)" 2>$null
+    return ($LASTEXITCODE -eq 0 -and "$exists".Trim() -eq "1")
+  } catch {
+    return $false
+  }
+}
+
 function Find-NvimSocket {
-  param([string]$ProjectCwd = "")
+  param(
+    [string]$ProjectCwd = "",
+    [string]$TargetFile = ""
+  )
 
   # 1. Explicit env var — probe it directly (no is-socket precheck on Windows).
   $envAddr = $env:NVIM_LISTEN_ADDRESS
-  if (-not [string]::IsNullOrEmpty($envAddr) -and (Test-NvimResponsive $envAddr)) {
+  if (-not [string]::IsNullOrEmpty($envAddr) -and
+      (Test-NvimHookTarget -Server $envAddr -ProjectCwd $ProjectCwd -TargetFile $TargetFile)) {
     return $envAddr
   }
 
@@ -59,31 +98,24 @@ function Find-NvimSocket {
       $lines = @(Get-Content -Path $pf.FullName -ErrorAction SilentlyContinue)
       if ($lines.Count -lt 1) { continue }
       $pipe = $lines[0]
-      $cwd  = if ($lines.Count -ge 2) { $lines[1] } else { "" }
       if ([string]::IsNullOrEmpty($pipe)) { continue }
 
       # Responsiveness probe self-heals stale pidfiles (crashed nvim, recycled PID).
-      if (-not (Test-NvimResponsive $pipe)) { continue }
+      if (-not (Test-NvimHookTarget -Server $pipe -ProjectCwd $ProjectCwd -TargetFile $TargetFile)) { continue }
 
-      # cwd match-or-parent rule, using the cwd the nvim itself reported.
-      if (-not [string]::IsNullOrEmpty($ProjectCwd) -and -not [string]::IsNullOrEmpty($cwd)) {
-        if ($ProjectCwd -eq $cwd -or $ProjectCwd.StartsWith($cwd + '\')) {
-          return $pipe
-        }
-      }
       $live.Add($pipe)
     }
   }
 
-  # 3. Named-pipe enumeration fallback. Cannot run the cwd tiebreak (a pipe found
-  # this way has no associated cwd — Windows has no /proc or lsof), so it only
-  # contributes live candidates, degrading to "first responsive pipe".
+  # 3. Named-pipe enumeration fallback. Project matching is performed by RPC,
+  # so enumerated pipes are held to the same rule as pidfile candidates.
   try {
     foreach ($path in [System.IO.Directory]::GetFiles('\\.\pipe\')) {
       $leaf = Split-Path $path -Leaf
       if ($leaf -like 'nvim.*') {
         $pipe = "\\.\pipe\$leaf"
-        if (-not $live.Contains($pipe) -and (Test-NvimResponsive $pipe)) {
+        if (-not $live.Contains($pipe) -and
+            (Test-NvimHookTarget -Server $pipe -ProjectCwd $ProjectCwd -TargetFile $TargetFile)) {
           $live.Add($pipe)
         }
       }
@@ -94,7 +126,13 @@ function Find-NvimSocket {
 
   if ($live.Count -eq 0) { return "" }
 
-  # 4. Prefer a cwd match among enumerated candidates is not possible (no cwd),
-  # so fall back to the first live pipe.
+  # 4. Prefer the project-matching instance that already has the target open.
+  if (-not [string]::IsNullOrEmpty($TargetFile)) {
+    foreach ($pipe in $live) {
+      if (Test-NvimHasBuffer -Server $pipe -TargetFile $TargetFile) { return $pipe }
+    }
+  }
+
+  # All candidates are already project-matched; use the first remaining one.
   return $live[0]
 }

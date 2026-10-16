@@ -40,15 +40,24 @@ try {
   }
 
   $cwd = $payload.cwd
+  if ([string]::IsNullOrEmpty($cwd)) { $cwd = (Get-Location).Path }
+
+  $targetFile = $payload.tool_input.file_path
+  if ([string]::IsNullOrEmpty($targetFile)) { $targetFile = $payload.file_path }
+  if ([string]::IsNullOrEmpty($targetFile)) { $targetFile = $payload.args.filePath }
+  if ([string]::IsNullOrEmpty($targetFile)) { $targetFile = $payload.args.path }
 
   . (Join-Path $PSScriptRoot "nvim-socket.ps1")
   . (Join-Path $PSScriptRoot "nvim-call.ps1")
 
-  $socket = Find-NvimSocket -ProjectCwd $cwd
+  $socket = Find-NvimSocket -ProjectCwd $cwd -TargetFile $targetFile
   if ([string]::IsNullOrEmpty($socket)) { exit 0 }
 
-  # Verbatim splice of the raw payload into [payload, backend].
-  $argsJson = "[$raw,""$Backend""]"
+  # Verbatim splice of the raw payload; add the routing cwd separately so the
+  # in-process handler can independently reject a cross-project RPC.
+  $backendJson = ConvertTo-Json -Compress -InputObject $Backend
+  $cwdJson = ConvertTo-Json -Compress -InputObject $cwd
+  $argsJson = "[$raw,$backendJson,$cwdJson]"
 
   if ($HookEvent -eq 'post') {
     $null = Invoke-NvimCall -Server $socket -Module 'code-preview.post_tool' `
