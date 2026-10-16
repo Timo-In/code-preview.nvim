@@ -122,8 +122,10 @@ end)
 
 describe("pre_tool tempfile cleanup", function()
   it("preserves fresh files from other Neovim instances and removes stale files", function()
-    local dir = os.getenv("TMPDIR") or "/tmp"
-    dir = dir:gsub("/$", "")
+    local dir = vim.fn.has("win32") == 1
+      and (os.getenv("TMP") or os.getenv("TEMP") or vim.fs.dirname(vim.fn.tempname()))
+      or (os.getenv("TMPDIR") or "/tmp")
+    dir = dir:gsub("\\", "/"):gsub("/$", "")
     local suffix = tostring(vim.uv.hrtime())
     local fresh = dir .. "/code-preview-diff-original-fresh-" .. suffix
     local stale = dir .. "/code-preview-diff-proposed-stale-" .. suffix

@@ -24,6 +24,7 @@ doc/tags
 
 # Go daemon binary
 bin/previewd
+bin/previewd.exe
 
 # Beads / Dolt files (added by bd init)
 .dolt/

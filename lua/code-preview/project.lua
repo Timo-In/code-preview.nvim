@@ -22,7 +22,26 @@ function M.normalize(path, base)
     value = base .. "/" .. value
   end
   value = vim.fs.normalize(vim.fn.resolve(vim.fn.fnamemodify(value, ":p")))
-  return (vim.uv or vim.loop).fs_realpath(value) or value
+  local uv = vim.uv or vim.loop
+  local real = uv.fs_realpath(value)
+  if real then return real end
+
+  -- Canonicalize the nearest existing ancestor so nonexistent targets still
+  -- compare correctly on platforms that expose alternate path spellings.
+  local current = value
+  local missing = {}
+  while current and current ~= "" do
+    table.insert(missing, 1, vim.fs.basename(current))
+    local parent = vim.fs.dirname(current)
+    if not parent or parent == current then break end
+    current = parent
+    real = uv.fs_realpath(current)
+    if real then
+      return vim.fs.normalize(real .. "/" .. table.concat(missing, "/"))
+    end
+  end
+
+  return value
 end
 
 --- Return whether path is root itself or one of its descendants.

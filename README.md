@@ -6,7 +6,7 @@
 
 **Review every edit your AI coding agent makes as a native Neovim diff — before it's written to disk.**
 
-[![CI](https://github.com/Timo-In/code-preview.nvim/actions/workflows/e2e-tests.yml/badge.svg)](https://github.com/Timo-In/code-preview.nvim/actions/workflows/e2e-tests.yml)
+[![CI](https://github.com/Timo-In/code-preview.nvim/actions/workflows/ci.yml/badge.svg)](https://github.com/Timo-In/code-preview.nvim/actions/workflows/ci.yml)
 [![Release](https://img.shields.io/github/v/release/Timo-In/code-preview.nvim?label=release)](https://github.com/Timo-In/code-preview.nvim/releases)
 [![Neovim](https://img.shields.io/badge/Neovim-0.10%2B-57A143?logo=neovim&logoColor=white)](https://neovim.io)
 [![License: MIT](https://img.shields.io/github/license/Timo-In/code-preview.nvim)](LICENSE)
@@ -61,11 +61,24 @@ With [lazy.nvim](https://github.com/folke/lazy.nvim):
 ```lua
 {
   "Timo-In/code-preview.nvim",
+  version = "*",
   config = function()
     require("code-preview").setup()
   end,
 }
 ```
+
+Install or refresh the prebuilt `previewd` service after installing or updating
+the plugin:
+
+```vim
+:CodePreviewInstallBinary
+```
+
+The command downloads the matching Linux, macOS, or Windows binary (amd64 or
+arm64) from the latest GitHub Release into Neovim's data directory. Go is only
+required when building `previewd` locally with `./build.sh`; the download command
+requires `curl`.
 
 <details>
 <summary>Manual (path-based)</summary>

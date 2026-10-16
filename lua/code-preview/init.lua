@@ -134,6 +134,15 @@ function M.setup(user_config)
     M.stop_daemon()
   end, { desc = "Stop Go previewd daemon" })
 
+  vim.api.nvim_create_user_command("CodePreviewInstallBinary", function()
+    local path, err = require("code-preview.binary").install()
+    if path then
+      vim.notify("[code-preview] Installed previewd at " .. path, vim.log.levels.INFO)
+    else
+      vim.notify("[code-preview] " .. err, vim.log.levels.ERROR)
+    end
+  end, { desc = "Download the previewd binary for this platform" })
+
   vim.api.nvim_create_user_command("CodePreviewMockTest", function()
     local res = require("code-preview.mock_test").run_simulation()
     vim.notify(table.concat(res, "\n"), vim.log.levels.INFO, { title = "code-preview mock test" })
@@ -212,10 +221,9 @@ function M.start_daemon(watch_path, debounce_ms)
 
   local this_source = debug.getinfo(1, "S").source:gsub("^@", "")
   local root = vim.fs.root(this_source, { ".git" }) or vim.fn.stdpath("config")
-  local bin_path = vim.fs.normalize(root .. "/bin/previewd")
-
-  if vim.fn.executable(bin_path) ~= 1 then
-    vim.notify("[code-preview] previewd binary not found at " .. bin_path, vim.log.levels.ERROR)
+  local bin_path, bin_err = require("code-preview.binary").resolve(root)
+  if not bin_path then
+    vim.notify("[code-preview] " .. bin_err, vim.log.levels.ERROR)
     return
   end
 
