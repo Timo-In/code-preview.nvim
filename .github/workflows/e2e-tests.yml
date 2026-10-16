@@ -27,6 +27,15 @@ jobs:
           neovim: true
           version: v0.10.4
 
+      - name: Set up Go
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
+
+      - name: Build previewd
+        run: ./build.sh
+
       - name: Install jq
         if: runner.os == 'Linux'
         run: sudo apt-get install -y jq

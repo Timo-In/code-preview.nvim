@@ -241,7 +241,10 @@ describe("single-buffer preview mode", function()
 		assert.is_true(diff.is_open())
 		assert.equals(tabs_before + 1, #vim.api.nvim_list_tabpages())
 		assert.equals(1, #vim.api.nvim_tabpage_list_wins(vim.api.nvim_get_current_tabpage()))
-    assert.equals(vim.uv.fs_realpath(real), vim.api.nvim_buf_get_name(0))
+    assert.equals(
+      require("code-preview.project").normalize(real),
+      require("code-preview.project").normalize(vim.api.nvim_buf_get_name(0))
+    )
     assert.is_false(vim.bo[vim.api.nvim_get_current_buf()].swapfile)
 		assert.same({ "line1", "changed" }, vim.api.nvim_buf_get_lines(0, 0, -1, false))
 
@@ -264,7 +267,10 @@ describe("single-buffer preview mode", function()
 
 		assert.is_true(diff.is_open())
 		assert.equals(tabs_before, #vim.api.nvim_list_tabpages())
-    assert.equals(vim.uv.fs_realpath(real), vim.api.nvim_buf_get_name(0))
+    assert.equals(
+      require("code-preview.project").normalize(real),
+      require("code-preview.project").normalize(vim.api.nvim_buf_get_name(0))
+    )
 
 		diff.close_diff_and_clear()
 		os.remove(real)

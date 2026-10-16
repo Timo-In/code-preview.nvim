@@ -42,7 +42,8 @@ describe("previewd binary", function()
     vim.fn.stdpath = function() return "/test/data" end
     vim.fn.executable = function() return 1 end
 
-    assert.equals("/plugin/bin/previewd", binary.resolve("/plugin"))
+    local suffix = vim.fn.has("win32") == 1 and ".exe" or ""
+    assert.equals("/plugin/bin/previewd" .. suffix, binary.resolve("/plugin"))
   end)
 
   it("falls back to the installed release binary", function()
@@ -51,7 +52,8 @@ describe("previewd binary", function()
       return path:find("/test/data/code%-preview/bin/previewd") and 1 or 0
     end
 
-    assert.equals("/test/data/code-preview/bin/previewd", binary.resolve("/plugin"))
+    local suffix = vim.fn.has("win32") == 1 and ".exe" or ""
+    assert.equals("/test/data/code-preview/bin/previewd" .. suffix, binary.resolve("/plugin"))
   end)
 
   it("downloads and verifies the release binary", function()
