@@ -19,7 +19,7 @@ Works with **Claude Code**, **OpenCode**, **GitHub Copilot CLI**, and **OpenAI C
 
 ## Demo
 
-![Claude Code demo](assets/code-preview-claudecode.gif)
+![Claude Code demo](assets/code-preview.png)
 
 > Shown with Claude Code. OpenCode, GitHub Copilot CLI, and Codex CLI work the same way — expand **📺 More demos** below.
 
@@ -41,14 +41,8 @@ Your AI coding agent proposes edits in its terminal — a cramped, scroll-past d
 ### OpenCode
 ![OpenCode demo](assets/code-preview-opencode.gif)
 
-### GitHub Copilot CLI
-![GitHub Copilot CLI demo](assets/code-preview-copilot.gif)
-
 ### OpenAI Codex CLI
 ![OpenAI Codex CLI demo](assets/code-preview-codex.gif)
-
-### Neo-tree integration
-![neo-tree integration demo](assets/code-preview-neotree-integration.gif)
 
 </details>
 
