@@ -88,7 +88,7 @@ local function write_json(path, data)
   if vim.tbl_isempty(data) then
     f:write("{}\n")
   else
-    f:write(vim.json.encode(data))
+    f:write((vim.json.encode(data):gsub("\\/", "/")))
   end
   f:close()
 end
