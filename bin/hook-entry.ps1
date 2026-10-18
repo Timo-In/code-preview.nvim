@@ -40,18 +40,32 @@ try {
   }
 
   $cwd = $payload.cwd
+  if ([string]::IsNullOrEmpty($cwd) -and $payload.toolCall -and $payload.toolCall.args) {
+    $cwd = $payload.toolCall.args.Cwd
+  }
+  if ([string]::IsNullOrEmpty($cwd) -and $payload.workspacePaths -and $payload.workspacePaths.Count -gt 0) {
+    $cwd = $payload.workspacePaths[0]
+  }
   if ([string]::IsNullOrEmpty($cwd)) { $cwd = (Get-Location).Path }
 
   $targetFile = $payload.tool_input.file_path
   if ([string]::IsNullOrEmpty($targetFile)) { $targetFile = $payload.file_path }
   if ([string]::IsNullOrEmpty($targetFile)) { $targetFile = $payload.args.filePath }
   if ([string]::IsNullOrEmpty($targetFile)) { $targetFile = $payload.args.path }
+  if ([string]::IsNullOrEmpty($targetFile) -and $payload.toolCall -and $payload.toolCall.args) {
+    $targetFile = $payload.toolCall.args.TargetFile
+  }
 
   . (Join-Path $PSScriptRoot "nvim-socket.ps1")
   . (Join-Path $PSScriptRoot "nvim-call.ps1")
 
   $socket = Find-NvimSocket -ProjectCwd $cwd -TargetFile $targetFile
-  if ([string]::IsNullOrEmpty($socket)) { exit 0 }
+  if ([string]::IsNullOrEmpty($socket)) {
+    if ($Backend -eq 'agy') {
+      if ($HookEvent -eq 'post') { Write-Output '{}' } else { Write-Output '{"decision":"allow"}' }
+    }
+    exit 0
+  }
 
   # Verbatim splice of the raw payload; add the routing cwd separately so the
   # in-process handler can independently reject a cross-project RPC.
@@ -62,12 +76,20 @@ try {
   if ($HookEvent -eq 'post') {
     $null = Invoke-NvimCall -Server $socket -Module 'code-preview.post_tool' `
                             -Function 'handle' -ArgsJson $argsJson
+    if ($Backend -eq 'agy') { Write-Output '{}' }
   } else {
     $result = Invoke-NvimCall -Server $socket -Module 'code-preview.pre_tool' `
                               -Function 'handle' -ArgsJson $argsJson
-    if ($null -ne $result -and $result -ne '') { Write-Output $result }
+    if ($null -ne $result -and $result -ne '') {
+      Write-Output $result
+    } elseif ($Backend -eq 'agy') {
+      Write-Output '{"decision":"allow"}'
+    }
   }
 } catch {
   # Boundary between agent and plugin: abstain on any failure.
+  if ($Backend -eq 'agy') {
+    if ($HookEvent -eq 'post') { Write-Output '{}' } else { Write-Output '{"decision":"allow"}' }
+  }
   exit 0
 }

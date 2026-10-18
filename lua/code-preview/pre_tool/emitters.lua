@@ -29,11 +29,26 @@ local function claudecode(ctx)
   return '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"ask","permissionDecisionReason":"Diff preview sent to Neovim. Review before accepting."}}\n'
 end
 
+-- Antigravity (agy) requires a JSON object with `decision` on PreToolUse stdout.
+-- For file-editing proposals (or Bash with Tier 2 preview), emit `"decision": "ask"`
+-- so the user can review the diff in Neovim before accepting; for non-gated tools
+-- or when permissions are deferred, emit `"decision": "allow"`.
+local function agy(ctx)
+  if ctx.defer_claude_permissions or ctx.defer_agy_permissions then
+    return '{"decision":"allow"}\n'
+  end
+  if not (CLAUDECODE_EMIT_TOOLS[ctx.tool_name or ""] or ctx.has_preview) then
+    return '{"decision":"allow"}\n'
+  end
+  return '{"decision":"ask","reason":"Diff preview sent to Neovim. Review before accepting."}\n'
+end
+
 M.emitters = {
   claudecode = claudecode,
   opencode   = none,
   copilot    = none,
   codex      = none,
+  agy        = agy,
   -- gemini defaults to `none` via the fallback below.
 }
 

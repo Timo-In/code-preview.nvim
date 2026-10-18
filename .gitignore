@@ -32,3 +32,4 @@ bin/previewd.exe
 .beads-credential-key
 .beads/proxieddb/
 *.gate.lock*
+.tnexus

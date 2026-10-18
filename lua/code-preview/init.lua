@@ -111,6 +111,16 @@ function M.setup(user_config)
     require("code-preview.backends.codex").uninstall(scope)
   end, vim.tbl_extend("force", scope_opts, { desc = "Uninstall code-preview hooks for OpenAI Codex CLI [global|local]" }))
 
+  vim.api.nvim_create_user_command("CodePreviewInstallAgyHooks", function(cmd_opts)
+    local scope = cmd_opts.args ~= "" and cmd_opts.args or (M.config and M.config.default_scope) or "global"
+    require("code-preview.backends.agy").install(scope)
+  end, vim.tbl_extend("force", scope_opts, { desc = "Install code-preview hooks for Antigravity (AGY) [global|local]" }))
+
+  vim.api.nvim_create_user_command("CodePreviewUninstallAgyHooks", function(cmd_opts)
+    local scope = cmd_opts.args ~= "" and cmd_opts.args or nil
+    require("code-preview.backends.agy").uninstall(scope)
+  end, vim.tbl_extend("force", scope_opts, { desc = "Uninstall code-preview hooks for Antigravity (AGY) [global|local]" }))
+
   vim.api.nvim_create_user_command("CodePreviewCloseDiff", function()
     require("code-preview.diff").close_diff_and_clear()
     require("code-preview.in_place").clear_preview()
@@ -380,6 +390,7 @@ function M.status()
     { name = "opencode",   label = "OpenCode   ", install_cmd = ":CodePreviewInstallOpenCodeHooks"   },
     { name = "copilot",    label = "Copilot CLI", install_cmd = ":CodePreviewInstallCopilotCliHooks" },
     { name = "codex",      label = "Codex CLI  ", install_cmd = ":CodePreviewInstallCodexCliHooks"   },
+    { name = "agy",        label = "Antigravity", install_cmd = ":CodePreviewInstallAgyHooks"        },
   }
 
   for _, b in ipairs(BACKENDS) do

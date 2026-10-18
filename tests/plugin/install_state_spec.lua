@@ -9,7 +9,7 @@
 -- shape across all four backends; end-to-end install/uninstall behaviour is
 -- covered by the per-backend shell tests under tests/backends/.
 
-local BACKENDS = { "claudecode", "opencode", "copilot", "codex" }
+local BACKENDS = { "claudecode", "opencode", "copilot", "codex", "agy" }
 
 -- Preload backend modules while the original cwd (which is on rtp via `.`) is
 -- still active; cd-ing first would break the require path.
@@ -25,10 +25,12 @@ describe("backends install_state() contract", function()
     original_cwd = vim.fn.getcwd()
     local tmp = vim.fn.tempname()
     vim.fn.mkdir(tmp, "p")
+    vim.env.CODE_PREVIEW_AGY_GLOBAL_HOOKS = tmp .. "/global_agy_hooks.json"
     vim.cmd("cd " .. vim.fn.fnameescape(tmp))
   end)
 
   after_each(function()
+    vim.env.CODE_PREVIEW_AGY_GLOBAL_HOOKS = nil
     vim.cmd("cd " .. vim.fn.fnameescape(original_cwd))
   end)
 

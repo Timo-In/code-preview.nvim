@@ -94,6 +94,28 @@ describe("pre_tool.handle (emitter output)", function()
     local out = pre_tool.handle(payload("Edit", { file_path = "/tmp/x" }), "future-agent")
     assert.equals("", out)
   end)
+
+  it("agy emits decision=ask JSON for replace_file_content", function()
+    local out = pre_tool.handle({
+      workspacePaths = { "/proj" },
+      toolCall = {
+        name = "replace_file_content",
+        args = { TargetFile = "/tmp/x", TargetContent = "a", ReplacementContent = "b" },
+      },
+    }, "agy")
+    assert.equals('{"decision":"ask","reason":"Diff preview sent to Neovim. Review before accepting."}\n', out)
+  end)
+
+  it("agy emits decision=allow JSON for non-preview run_command", function()
+    local out = pre_tool.handle({
+      workspacePaths = { "/proj" },
+      toolCall = {
+        name = "run_command",
+        args = { CommandLine = "ls", Cwd = "/proj" },
+      },
+    }, "agy")
+    assert.equals('{"decision":"allow"}\n', out)
+  end)
 end)
 
 describe("pre_tool.handle (robustness)", function()

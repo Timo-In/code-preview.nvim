@@ -187,6 +187,23 @@ function M.check()
   else
     warn("Codex CLI hooks not installed — run :CodePreviewInstallCodexCliHooks")
   end
+
+  -- ── Antigravity (AGY) backend ─────────────────────────────────
+
+  start("Antigravity (AGY) backend")
+
+  if vim.fn.executable("agy") == 1 then
+    ok("agy CLI is available in PATH")
+  else
+    warn("agy not found in PATH")
+  end
+
+  local agy_backend = require("code-preview.backends.agy")
+  if agy_backend.is_installed() then
+    ok("AGY hooks are installed (hooks.json)")
+  else
+    warn("AGY hooks not installed — run :CodePreviewInstallAgyHooks")
+  end
 end
 
 return M

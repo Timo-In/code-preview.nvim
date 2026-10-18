@@ -47,29 +47,55 @@ case "$BACKEND" in
     ;;
 esac
 
-CWD="$(printf '%s' "$INPUT" | jq -r '.cwd // empty' 2>/dev/null || true)"
+CWD="$(printf '%s' "$INPUT" | jq -r '.cwd // .toolCall.args.Cwd // .workspacePaths[0] // empty' 2>/dev/null || true)"
 [[ -z "$CWD" ]] && CWD="$PWD"
 
-TARGET_FILE="$(printf '%s' "$INPUT" | jq -r '.tool_input.file_path // .file_path // .args.filePath // .args.path // empty' 2>/dev/null || true)"
+TARGET_FILE="$(printf '%s' "$INPUT" | jq -r '.tool_input.file_path // .file_path // .args.filePath // .args.path // .toolCall.args.TargetFile // empty' 2>/dev/null || true)"
 if [[ -z "$TARGET_FILE" ]]; then
   TARGET_FILE="$(printf '%s' "$INPUT" | grep -oE '\*\*\* (Update|Add|Delete) File:[[:space:]]*[^"[:space:]]+' | head -1 | sed -E 's/\*\*\* (Update|Add|Delete) File:[[:space:]]*//' || true)"
 fi
+
+abstain_exit() {
+  if [[ "$BACKEND" == "agy" ]]; then
+    case "$EVENT" in
+      pre)  printf '{"decision":"allow"}\n' ;;
+      post) printf '{}\n' ;;
+    esac
+  fi
+  exit 0
+}
 
 # Socket discovery — silent failure is fine, we abstain below.
 source "$BIN_DIR/nvim-socket.sh" "$CWD" "$TARGET_FILE" 2>/dev/null || true
 source "$BIN_DIR/nvim-call.sh"
 
 if [[ -z "${NVIM_SOCKET:-}" ]]; then
-  exit 0
+  abstain_exit
 fi
 
 # Splice the raw payload verbatim into the RPC args array. CWD is included as a
 # separate routing assertion so the in-process handler can re-check the target.
 # Never re-serialise it. Malformed payload (jq fails) → abstain.
 ARGS="$(jq -nc --argjson r "$INPUT" --arg b "$BACKEND" --arg cwd "$CWD" '[$r, $b, $cwd]' 2>/dev/null || true)"
-[[ -z "$ARGS" ]] && exit 0
+[[ -z "$ARGS" ]] && abstain_exit
 
 case "$EVENT" in
-  pre)  nvim_call code-preview.pre_tool  handle "$ARGS" ;;
-  post) nvim_call code-preview.post_tool handle "$ARGS" >/dev/null ;;
+  pre)
+    if [[ "$BACKEND" == "agy" ]]; then
+      OUT="$(nvim_call code-preview.pre_tool handle "$ARGS")"
+      if [[ -n "$OUT" ]]; then
+        printf '%s\n' "$OUT"
+      else
+        printf '{"decision":"allow"}\n'
+      fi
+    else
+      nvim_call code-preview.pre_tool handle "$ARGS"
+    fi
+    ;;
+  post)
+    nvim_call code-preview.post_tool handle "$ARGS" >/dev/null
+    if [[ "$BACKEND" == "agy" ]]; then
+      printf '{}\n'
+    fi
+    ;;
 esac

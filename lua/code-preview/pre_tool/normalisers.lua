@@ -335,11 +335,134 @@ local function codex(raw)
   return { tool_name = nil, cwd = cwd, tool_input = {} }
 end
 
+-- Antigravity (agy) hook payload normalisation.
+--
+-- AGY passes camelCase metadata at top level ({conversationId, workspacePaths,
+-- artifactDirectoryPath, stepIdx}) and the tool invocation nested under
+-- `toolCall = { name = "...", args = { ... } }`.
+--
+-- Supported editing / execution tools:
+--   replace_file_content       -> Edit
+--   multi_replace_file_content -> MultiEdit
+--   write_to_file              -> Write (supports Append; skips Artifact files)
+--   run_command                -> Bash
+local function agy(raw)
+  local tc = (raw and type(raw.toolCall) == "table") and raw.toolCall or raw or {}
+  local tool = tc.name or (raw and raw.tool_name) or ""
+  local args = (type(tc.args) == "table" and tc.args)
+    or (raw and type(raw.tool_input) == "table" and raw.tool_input)
+    or {}
+
+  local function blank(s) return s == nil or s == "" end
+
+  -- Resolve cwd: prefer explicit command Cwd, then top-level cwd, then workspacePaths[1].
+  local cwd = ""
+  if type(args.Cwd) == "string" and args.Cwd ~= "" then
+    cwd = args.Cwd
+  elseif type(args.cwd) == "string" and args.cwd ~= "" then
+    cwd = args.cwd
+  elseif raw and type(raw.cwd) == "string" and raw.cwd ~= "" then
+    cwd = raw.cwd
+  elseif raw and type(raw.workspacePaths) == "table" and type(raw.workspacePaths[1]) == "string" then
+    cwd = raw.workspacePaths[1]
+  end
+
+  if tool == "replace_file_content" then
+    local fp = resolve_path(args.TargetFile or args.file_path, cwd)
+    if blank(fp) then
+      return { tool_name = nil, cwd = cwd, tool_input = {} }
+    end
+    return {
+      tool_name  = "Edit",
+      cwd        = cwd,
+      tool_input = {
+        file_path   = fp,
+        old_string  = args.TargetContent or args.old_string or "",
+        new_string  = args.ReplacementContent or args.new_string or "",
+        replace_all = (args.AllowMultiple == true) or (args.replace_all == true),
+      },
+    }
+  elseif tool == "multi_replace_file_content" then
+    local fp = resolve_path(args.TargetFile or args.file_path, cwd)
+    if blank(fp) then
+      return { tool_name = nil, cwd = cwd, tool_input = {} }
+    end
+    local edits = {}
+    if type(args.ReplacementChunks) == "table" then
+      for i, chunk in ipairs(args.ReplacementChunks) do
+        edits[i] = {
+          old_string  = chunk.TargetContent or chunk.old_string or "",
+          new_string  = chunk.ReplacementContent or chunk.new_string or "",
+          replace_all = chunk.AllowMultiple == true,
+        }
+      end
+    elseif type(args.edits) == "table" then
+      edits = args.edits
+    end
+    return {
+      tool_name  = "MultiEdit",
+      cwd        = cwd,
+      tool_input = {
+        file_path = fp,
+        edits     = edits,
+      },
+    }
+  elseif tool == "write_to_file" then
+    local fp = resolve_path(args.TargetFile or args.file_path, cwd)
+    if blank(fp) then
+      return { tool_name = nil, cwd = cwd, tool_input = {} }
+    end
+    -- Skip internal AGY artifacts (plans, scratch files in artifactDirectoryPath).
+    if args.ArtifactMetadata ~= nil and args.ArtifactMetadata ~= vim.NIL then
+      return { tool_name = nil, cwd = cwd, tool_input = {} }
+    end
+    local artifact_dir = raw and raw.artifactDirectoryPath
+    if type(artifact_dir) == "string" and artifact_dir ~= "" then
+      local norm_art = vim.fs.normalize(artifact_dir)
+      if fp == norm_art or fp:sub(1, #norm_art + 1) == norm_art .. "/" then
+        return { tool_name = nil, cwd = cwd, tool_input = {} }
+      end
+    end
+    local content = args.CodeContent or args.content or ""
+    if args.Append == true and vim.fn.filereadable(fp) == 1 then
+      local fh = io.open(fp, "r")
+      if fh then
+        local existing = fh:read("*a") or ""
+        fh:close()
+        content = existing .. content
+      end
+    end
+    return {
+      tool_name  = "Write",
+      cwd        = cwd,
+      tool_input = {
+        file_path = fp,
+        content   = content,
+      },
+    }
+  elseif tool == "run_command" then
+    local cmd = args.CommandLine or args.command or ""
+    if blank(cmd) then
+      return { tool_name = nil, cwd = cwd, tool_input = {} }
+    end
+    return {
+      tool_name  = "Bash",
+      cwd        = cwd,
+      tool_input = {
+        command = cmd,
+      },
+    }
+  end
+
+  return { tool_name = nil, cwd = cwd, tool_input = {} }
+end
+
 M.normalisers = {
   claudecode = claudecode,
   opencode   = opencode,
   copilot    = copilot,
   codex      = codex,
+  agy        = agy,
   -- gemini will land its own normaliser when it flips.
 }
 

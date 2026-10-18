@@ -426,3 +426,122 @@ describe("normalisers.normalise (codex)", function()
     end
   end)
 end)
+
+describe("pre_tool.normalise (agy)", function()
+  it("maps replace_file_content to Edit with workspacePaths[1] as cwd", function()
+    local out = normalisers.normalise({
+      workspacePaths = { "/proj" },
+      toolCall = {
+        name = "replace_file_content",
+        args = {
+          TargetFile         = "/proj/src/foo.lua",
+          TargetContent      = "old_val",
+          ReplacementContent = "new_val",
+          AllowMultiple      = true,
+        },
+      },
+    }, "agy")
+    assert.equals("Edit",              out.tool_name)
+    assert.equals("/proj",             out.cwd)
+    assert.equals("/proj/src/foo.lua", out.tool_input.file_path)
+    assert.equals("old_val",           out.tool_input.old_string)
+    assert.equals("new_val",           out.tool_input.new_string)
+    assert.equals(true,                out.tool_input.replace_all)
+  end)
+
+  it("maps multi_replace_file_content to MultiEdit", function()
+    local out = normalisers.normalise({
+      workspacePaths = { "/proj" },
+      toolCall = {
+        name = "multi_replace_file_content",
+        args = {
+          TargetFile = "src/bar.lua",
+          ReplacementChunks = {
+            { TargetContent = "a", ReplacementContent = "b", AllowMultiple = false },
+            { TargetContent = "c", ReplacementContent = "d", AllowMultiple = true },
+          },
+        },
+      },
+    }, "agy")
+    assert.equals("MultiEdit",         out.tool_name)
+    assert.equals("/proj",             out.cwd)
+    assert.equals("/proj/src/bar.lua", out.tool_input.file_path)
+    assert.are.same({
+      { old_string = "a", new_string = "b", replace_all = false },
+      { old_string = "c", new_string = "d", replace_all = true },
+    }, out.tool_input.edits)
+  end)
+
+  it("maps write_to_file to Write", function()
+    local out = normalisers.normalise({
+      workspacePaths = { "/proj" },
+      toolCall = {
+        name = "write_to_file",
+        args = {
+          TargetFile  = "/proj/new.lua",
+          CodeContent = "return {}\n",
+          Overwrite   = true,
+        },
+      },
+    }, "agy")
+    assert.equals("Write",         out.tool_name)
+    assert.equals("/proj",         out.cwd)
+    assert.equals("/proj/new.lua", out.tool_input.file_path)
+    assert.equals("return {}\n",   out.tool_input.content)
+  end)
+
+  it("write_to_file skips internal artifacts (ArtifactMetadata or artifactDirectoryPath)", function()
+    local out1 = normalisers.normalise({
+      workspacePaths = { "/proj" },
+      toolCall = {
+        name = "write_to_file",
+        args = {
+          TargetFile       = "/Users/me/.gemini/antigravity-cli/brain/123/plan.md",
+          CodeContent      = "# Plan",
+          ArtifactMetadata = { Summary = "plan", UserFacing = true, RequestFeedback = true },
+        },
+      },
+    }, "agy")
+    assert.is_nil(out1.tool_name)
+
+    local out2 = normalisers.normalise({
+      workspacePaths        = { "/proj" },
+      artifactDirectoryPath = "/Users/me/.gemini/antigravity-cli/brain/123",
+      toolCall = {
+        name = "write_to_file",
+        args = {
+          TargetFile  = "/Users/me/.gemini/antigravity-cli/brain/123/scratch/tmp.py",
+          CodeContent = "print(1)",
+        },
+      },
+    }, "agy")
+    assert.is_nil(out2.tool_name)
+  end)
+
+  it("maps run_command to Bash and prefers args.Cwd", function()
+    local out = normalisers.normalise({
+      workspacePaths = { "/proj" },
+      toolCall = {
+        name = "run_command",
+        args = {
+          CommandLine = "rm old.txt",
+          Cwd         = "/proj/sub",
+        },
+      },
+    }, "agy")
+    assert.equals("Bash",       out.tool_name)
+    assert.equals("/proj/sub",  out.cwd)
+    assert.equals("rm old.txt", out.tool_input.command)
+  end)
+
+  it("unknown or read-only agy tools yield nil tool_name", function()
+    for _, tool in ipairs({ "view_file", "search_web", "ask_question", "manage_task" }) do
+      local out = normalisers.normalise({
+        workspacePaths = { "/proj" },
+        toolCall = { name = tool, args = {} },
+      }, "agy")
+      assert.is_nil(out.tool_name)
+    end
+  end)
+end)
+
